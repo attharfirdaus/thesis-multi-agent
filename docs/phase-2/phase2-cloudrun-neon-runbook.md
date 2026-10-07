@@ -333,8 +333,13 @@ stays inside those monthly grants; Neon scaling to zero only adds a ~100–300 m
 
 - **Neon project-create via CLI/API** is not a documented first-class free-tier flow; step 1 uses the
   Console. Not exercised end to end in this runbook.
-- **Creating the two roles on Neon** — the SQL mirrors `backend/scripts/bootstrap_db.sh`, but Neon's
-  permission surface for `create role` from the owner role was not tested against a live project here.
+- **Creating the two roles on Neon** — verified against Neon's documentation on 2026-10-07: roles
+  created through the Console, CLI or API receive `neon_superuser` membership (which includes
+  `CREATEDB`, `CREATEROLE`, `BYPASSRLS`), so the project owner role can run the `create role`
+  statements in step 3. Roles created **with SQL** get only basic public-schema privileges, which is
+  exactly what this design needs: `thesis_app` therefore does **not** carry `BYPASSRLS`, so the row
+  level security policies apply to it. Source: <https://neon.com/docs/manage/roles>. Not exercised
+  against a live project in this runbook.
 - **The `-pooler` hostname convention** is Neon's documented naming; the free-tier/pooler *behaviour* is
   in `arch-data-layer.md`, but the exact hostname string was not re-fetched today.
 - **`--max-instances 3` connection math** against Neon's `max_connections` was reasoned from
