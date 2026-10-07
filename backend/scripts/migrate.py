@@ -1,9 +1,13 @@
 """Apply migrations/*.sql in filename order, recording each in schema_migrations.
 
-Usage:  uv run python scripts/migrate.py           (uses MIGRATION_DATABASE_URL, else DATABASE_URL)
+Usage:  uv run python -m scripts.migrate
 
-Numbered plain-SQL files rather than a migration framework: the schema is one file today, and a
-framework can be added when there is a second one.
+Reads .env through the app's Settings, so there is no need to export anything in the shell.
+Deliberately NOT meant to be run after `source .env`: bash strips the quotes from a JSON list
+value such as ALLOWED_ORIGINS and the app then parses it differently than the shell did.
+
+Numbered plain-SQL files rather than a migration framework: the schema is two files today, and a
+framework can be added when that hurts.
 """
 
 import os
@@ -17,8 +21,16 @@ MIGRATIONS_DIR = pathlib.Path(__file__).resolve().parent.parent / "migrations"
 
 def dsn() -> str:
     url = os.environ.get("MIGRATION_DATABASE_URL") or os.environ.get("DATABASE_URL")
+    if url:
+        return url
+    # Import here so that a plain `python -m scripts.migrate` from backend/ works without the
+    # caller having to prepare the environment first (Settings reads backend/.env).
+    from app.config import get_settings
+
+    settings = get_settings()
+    url = settings.migration_database_url or settings.database_url
     if not url:
-        sys.exit("Set MIGRATION_DATABASE_URL (preferred) or DATABASE_URL before migrating.")
+        sys.exit("Set MIGRATION_DATABASE_URL (preferred) or DATABASE_URL, or create backend/.env.")
     return url
 
 

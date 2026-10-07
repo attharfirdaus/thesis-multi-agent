@@ -7,8 +7,8 @@ on:
 jobs:
   backend:
     runs-on: ubuntu-24.04
-    # A service container in CI is not the same thing as containerising the app: the app itself
-    # runs natively on the VM and on the development machine (see DECISIONS.md, 2026-10-07).
+    # The service container is CI-only scaffolding for Postgres; the application itself runs as a
+    # container on Cloud Run in production and natively on the development machine (DECISIONS.md).
     services:
       postgres:
         image: postgres:18
@@ -19,9 +19,14 @@ jobs:
           --health-cmd "pg_isready -U postgres"
           --health-interval 5s --health-timeout 5s --health-retries 20
     env:
-      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/thesis_test
-      MIGRATION_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/thesis_test
       ENV: test
+      PGHOST: localhost
+      PGUSER: postgres
+      PGPASSWORD: postgres
+      # Same roles and URLs the local bootstrap creates, so CI exercises the same RLS design.
+      # Running as the superuser instead would silently bypass row-level security.
+      DATABASE_URL: postgresql://thesis_app:app_local_pw@localhost:5432/thesis_test
+      MIGRATION_DATABASE_URL: postgresql://thesis_migrator:migrator_local_pw@localhost:5432/thesis_test
     steps:
       - uses: actions/checkout@v5
       - uses: astral-sh/setup-uv@v7
@@ -32,11 +37,9 @@ jobs:
         run: |
           uv python install 3.13
           uv sync --locked
-      - name: Create test database and migrate
+      - name: Create roles and the test database
         working-directory: backend
-        run: |
-          psql "$DATABASE_URL" -c "create database thesis_test" || true
-          uv run python -m scripts.migrate
+        run: ./scripts/bootstrap_db.sh
       - name: Lint
         working-directory: backend
         run: uv run ruff check .
@@ -68,3 +71,30 @@ jobs:
       - name: Build
         working-directory: frontend
         run: npm run build
+
+  image:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - name: Build the production image
+        # The only automated check that the Dockerfile is valid. There is no container runtime on
+        # the development machine, so a broken image would otherwise surface on the first deploy.
+        run: docker build -t thesis-api:ci ./backend
+      - name: The image boots and serves
+        # An unreachable database is expected here, so /healthz answering 503 is a pass: this step
+        # proves the image starts, imports the app and serves HTTP.
+        run: |
+          docker run -d --name api -p 8080:8080 \
+            -e DATABASE_URL="postgresql://invalid:invalid@127.0.0.1:5432/none" \
+            thesis-api:ci
+          for _ in $(seq 1 15); do
+            code=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8080/healthz || true)
+            if [ -n "$code" ] && [ "$code" != "000" ]; then
+              echo "GET /healthz -> $code (503 expected without a database)"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "The container never answered /healthz"
+          docker logs api
+          exit 1

@@ -10,14 +10,21 @@ import pytest
 BACKEND = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(BACKEND))
 
-os.environ.setdefault("ENV", "test")
-os.environ.setdefault(
-    "DATABASE_URL", "postgresql://thesis_app:app_local_pw@localhost:5432/thesis_test"
+# Forced, not setdefault: these fixtures TRUNCATE every tenant table, so an inherited
+# DATABASE_URL from the shell (for example after `source .env`) must never be honoured here.
+os.environ["ENV"] = "test"
+os.environ["DATABASE_URL"] = "postgresql://thesis_app:app_local_pw@localhost:5432/thesis_test"
+os.environ["MIGRATION_DATABASE_URL"] = (
+    "postgresql://thesis_migrator:migrator_local_pw@localhost:5432/thesis_test"
 )
-os.environ.setdefault(
-    "MIGRATION_DATABASE_URL", "postgresql://thesis_migrator:migrator_local_pw@localhost:5432/thesis_test"
-)
-os.environ.setdefault("COOKIE_SECURE", "false")
+os.environ["COOKIE_SECURE"] = "false"
+# Also forced: `source .env` in bash strips the quotes from this JSON list, and Settings prefers
+# an environment variable over the file, so an inherited value would fail to parse.
+os.environ["ALLOWED_ORIGINS"] = '["http://localhost:3000"]'
+
+for _var in ("DATABASE_URL", "MIGRATION_DATABASE_URL"):
+    if not os.environ[_var].rsplit("/", 1)[-1].startswith("thesis_test"):
+        raise RuntimeError(f"Refusing to run tests against {_var}: it is not the test database.")
 
 import psycopg  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402

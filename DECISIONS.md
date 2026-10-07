@@ -5,18 +5,45 @@ Every provider/model/library fact cited in this project carries a source URL and
 
 ## Open decisions
 
-No model, provider or hosting decision remains open: O-1 through O-7 were all decided on 2026-10-06 (two gate entries below). What is still open lives in PRD section 14 — the supervisors' metacognitive rubric, the few-shot calibration examples for Bloom levels with no real data, institutional ethics clearance, the validation-subset size, the SUS instrument, and the feedback-text format.
+No model or provider decision remains open. The hosting decisions (O-2, O-3, O-5) were re-taken on 2026-10-07 — see the newest entry — and supersede the 2026-10-06 VM entry below, which is kept as the record of why the VM was chosen and why it was then dropped. What is still open lives in PRD section 14 — the supervisors' metacognitive rubric, the few-shot calibration examples for Bloom levels with no real data, institutional ethics clearance, the validation-subset size, the SUS instrument, and the feedback-text format.
+
+## 2026-10-07 — Architecture reversed: no virtual machine (decided by Atthar)
+
+**Decision.** Deploy on managed services only: the FastAPI + LangGraph API on **Google Cloud Run** (`asia-southeast1`), the database on **Neon PostgreSQL** (Singapore), the frontend on **Vercel Hobby** (Cloudflare Pages as the drop-in alternative), and LLM inference through **Cloudflare Workers AI** (`@cf/google/gemma-4-26b-a4b-it`, per O-1). No VM, no SSH, no OS patching, no reverse proxy, no firewall rules. This supersedes O-2 (Oracle Always Free ARM VM), O-3 (Postgres self-hosted on that VM) and O-5 (frontend served from it).
+
+**Why the reversal (Atthar's reason).** A VM carries ongoing administration — SSH, OS updates, firewall, TLS renewal, monitoring — that is disproportionate for a thesis prototype whose subject is the multi-agent pipeline, not server operations. Explicit instruction: do not reintroduce a VM without a concrete technical blocker.
+
+**Why the VM is not technically required** (verified 2026-10-07; evidence in `docs/phase-2/arch-*.md`):
+
+1. **The reason the VM was chosen disappeared.** It was chosen on 2026-10-06 because the backend loaded an IndoBERT checkpoint and needed ≈1.3–2.0 GB resident, and because a batch run needed a process that would not be recycled. O-4 removed the model on the same day; the backend now holds no weights, no torch and no GPU requirement.
+2. **LangGraph in library mode needs no long-lived server.** Its own docs require long-lived API + queue-worker containers only for the managed Agent Server; the checkpointed library path runs inside any process and resumes from a `thread_id`. Their serverless warning is scoped to the Agent Server binary, not to the library.
+3. **It writes nothing to disk.** Checked directly: no temp files, no subprocesses, no in-process background tasks in `backend/app`. Uploads are parsed in memory.
+4. **The batch shape fits a request.** Cloud Run allows a request up to 60 minutes, and a batch is decomposed so each submission is an independently retried invocation, with LangGraph state checkpointed in Postgres — which is the resumability the PRD already required, without a worker host or a queue service.
+
+**What the VM bought, and why it is not needed.** Control, no cold start, and a single vendor. Control is not a requirement — nothing in the PRD needs a fixed outbound IP, a persistent disk or a cron daemon. A cold start of a few seconds is invisible for a lecturer-initiated batch. Vendor count rises from one to three, which is the tradeoff Atthar accepted in exchange for near-zero operational work.
+
+**Constraints accepted with this architecture:**
+
+- Neon suspends compute after 5 minutes idle and wakes automatically on the next query — no manual unpause before a demonstration, unlike the alternative that pauses for a week and needs an operator.
+- Neon's pooler runs PgBouncer in **transaction mode**, so server-side prepared statements had to be disabled: `prepare_threshold=None` on the connection pool (`backend/app/db.py`). Tenant context already used `SET LOCAL` (never plain `SET`), which is what makes pooled connections safe for the row-level-security design.
+- The compute host and the database host now process student documents during extraction and redaction, before anything is sent to an LLM. Both were checked against the fixed rule that no provider may train on content: Cloud Run and Neon both pass (`docs/phase-2/arch-privacy-topology.md`).
+- **Documents are never persisted.** Migration `0002_no_raw_document_storage.sql` drops `file_ref` and `raw_text`; only the redacted segments survive, because scores and evidence offsets point at them. No object storage exists in this architecture.
+- Vercel Hobby is excluded from Vercel's DPA and its terms permit training on free-tier content — acceptable only because the frontend never receives student text (the browser calls the API directly). If the clause or the data stance becomes a problem, Cloudflare Pages is the drop-in replacement.
+
+**Residual risks, recorded rather than hidden:** (a) Vercel Hobby's "non-commercial personal use only" clause; (b) `StudentIdentity.real_identifier` still lives in the managed database — the privacy review recommends keeping the identity mapping outside any managed database, which is a change to FR-04 and needs Atthar's decision; (c) the Cloudflare Workers AI key is a production secret and must live in Secret Manager.
+
+**Local development is unchanged:** uv + npm + Homebrew PostgreSQL, started by `scripts/dev.sh`. The development machine still has no container runtime; Cloud Build builds the production image in the cloud.
 
 ## 2026-10-07 — Phase 2 start: environment, versions and the local stack
 
 ### Decided
 
-- **No containers anywhere** (Atthar). The VM runs native systemd services and the development machine has no Docker, so Compose would be a third way to run one stack. Local development is uv + npm + Homebrew PostgreSQL, started by `scripts/dev.sh`. PRD §8, §13 updated accordingly.
+- **No containers on the development machine** (Atthar). Local development is uv + npm + Homebrew PostgreSQL, started by `scripts/dev.sh`, with no Compose file. [Partially superseded 2026-10-07: production now runs a container image, but Cloud Build builds it in the cloud, so the development machine still needs no container runtime.] PRD §8, §13 updated accordingly.
 - **Pins verified 2026-10-07** (PyPI/npm/registry metadata and project release schedules; full table with sources in `docs/phase-2/phase2-version-pins.md`): Python **3.13** (LangGraph 1.2.14 declares 3.10–3.13 only, so 3.14 would put the orchestration library outside its declared support), Node **24 LTS**, Next.js **16.3.8**, React 19.2.8, Tailwind **4.3.3**, shadcn CLI **4.21.2**, FastAPI **0.142.2**, Uvicorn 0.54.0, Pydantic **2.13.5**, psycopg **3.3.6** `[binary]`, PostgreSQL **18.6**, uv **0.12.23**.
 - **Boring-pin rule:** releases published hours before retrieval are skipped in favour of the previous patch (Next 16.4.0 → 16.3.8; shadcn 4.21.3 → 4.21.2), while routine patch bumps are taken (LangGraph 1.2.14, psycopg 3.3.6). Rationale: a regression in the toolchain costs thesis days; one patch of soak costs nothing.
 - **TypeScript stays 5.x** (create-next-app resolved `^5`). TypeScript 7 is the native Go compiler rewrite and does not expose the JS compiler API, which non-Next tooling still consumes.
-- **Region: Singapore (ap-singapore-1)**, not Jakarta/Batam: the runbook flags Batam A1 capacity as unverifiable and the home region is permanent and one-only, so the choice is effectively irreversible. [INFERENCE from the runbook's capacity gap; revisit only before creating the tenancy.]
-- **Hostname: a free DuckDNS subdomain** for TLS now (Atthar), swappable in one Caddyfile line later.
+- **Region: Singapore** for everything that offers a choice. [Superseded 2026-10-07 for the Oracle reasoning: the tenancy's permanent home region no longer applies. Cloud Run runs in `asia-southeast1` and Neon is provisioned in a Singapore region.]
+- **Hostname:** [superseded 2026-10-07 — Cloud Run provides an HTTPS `*.run.app` URL with a managed certificate, so no DuckDNS name and no reverse proxy are needed.]
 - **Dependencies are installed when the phase that uses them starts**: LangGraph and psycopg's checkpointer are *pinned now* but not installed until phase 4, so the phase-2 lockfile stays small.
 
 ### Schema and auth decisions (implemented)

@@ -29,7 +29,10 @@ def pool() -> ConnectionPool:
             min_size=1,
             max_size=5,
             open=False,
-            kwargs={"autocommit": False},
+            # Neon's pooler runs PgBouncer in transaction mode:
+            # prepare_threshold=None disables server-side named prepared statements,
+            # which break when subsequent queries on the same client hit different backend connections.
+            kwargs={"autocommit": False, "prepare_threshold": None},
         )
     return _pool
 
