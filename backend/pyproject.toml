@@ -1,0 +1,40 @@
+[project]
+name = "thesis-multi-agent-backend"
+version = "0.1.0"
+description = "Multi-agent LLM evaluation backend (phase 2 skeleton: auth + schema)"
+requires-python = ">=3.13,<3.14"
+dependencies = [
+    # Web layer — pinned from PyPI metadata, verified 2026-10-07
+    "fastapi==0.142.2",
+    "uvicorn[standard]==0.54.0",
+    "pydantic[email]==2.13.5",
+    "pydantic-settings==2.15.0",
+    # Database — psycopg[binary] ships aarch64 manylinux wheels, so no build toolchain on the VM
+    "psycopg[binary,pool]==3.3.6",
+    # Auth
+    "argon2-cffi==25.1.0",
+]
+# Phase 4 adds the agent pipeline; pins already researched (2026-10-07):
+#   langgraph==1.2.14, langgraph-checkpoint-postgres==3.1.2
+# Phase 3 adds ingestion; verify versions when they are actually used.
+
+[dependency-groups]
+dev = ["pytest>=8", "httpx>=0.27", "ruff>=0.6", "mypy>=1.11"]
+
+[tool.ruff]
+line-length = 110
+target-version = "py313"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "S", "SIM"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["S101", "S105"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.mypy]
+python_version = "3.13"
+ignore_missing_imports = true
+files = ["app"]

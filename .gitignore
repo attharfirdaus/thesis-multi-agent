@@ -1,0 +1,23 @@
+# Local environment: macOS, no containers.
+.venv/
+.env
+.env.local
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# Node
+node_modules/
+.next/
+out/
+*.tsbuildinfo
+
+# macOS
+.DS_Store
+
+# Uploads / exports produced while trying the app out
+/tmp-files/
+
+samples/
