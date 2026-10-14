@@ -1,6 +1,7 @@
 """Settings, read from the environment only. No secret has a default in production."""
 
 from functools import lru_cache
+from typing import Literal
 
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -22,6 +23,12 @@ class Settings(BaseSettings):
     session_ttl_days: int = Field(default=14, alias="SESSION_TTL_DAYS")
     # Must be true on the real host (HTTPS). False is for local http development only.
     cookie_secure: bool = Field(default=False, alias="COOKIE_SECURE")
+    # "lax" when the frontend and API share a site (localhost, or one hostname).
+    # "none" is required when the browser page and the API are on different sites
+    # (e.g. a Vercel frontend calling a tunneled local API): browsers do not send a
+    # SameSite=Lax cookie on a cross-site fetch, so the session would silently not arrive.
+    # "none" is only accepted by browsers together with Secure=true.
+    cookie_samesite: Literal["lax", "strict", "none"] = Field(default="lax", alias="COOKIE_SAMESITE")
     # Set to the hostname (e.g. example.duckdns.org) so cookies are not sent to other subdomains.
     cookie_domain: str | None = Field(default=None, alias="COOKIE_DOMAIN")
 

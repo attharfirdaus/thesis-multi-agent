@@ -32,7 +32,7 @@ def _set_session_cookies(response: Response, token: str, csrf: str) -> None:
         "max_age": max_age,
         "httponly": True,
         "secure": settings.cookie_secure,
-        "samesite": "lax",
+        "samesite": settings.cookie_samesite,
         "domain": settings.cookie_domain,
         "path": "/",
     }
@@ -43,7 +43,7 @@ def _set_session_cookies(response: Response, token: str, csrf: str) -> None:
         max_age=max_age,
         httponly=False,
         secure=settings.cookie_secure,
-        samesite="lax",
+        samesite=settings.cookie_samesite,
         domain=settings.cookie_domain,
         path="/",
     )

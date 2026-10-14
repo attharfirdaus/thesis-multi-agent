@@ -5,8 +5,10 @@ import uuid
 
 import psycopg
 import pytest
+from pydantic import ValidationError
 
 from app import db
+from app.config import Settings
 
 GOOD_PASSWORD = "kata-sandi-panjang-2026"
 
@@ -106,6 +108,16 @@ def test_login_is_rate_limited(client):
     blocked = client.post("/auth/login", json={"email": "dosen@example.ac.id", "password": "salah"})
     assert blocked.status_code == 429
     assert "Retry-After" in blocked.headers
+
+
+def test_cookie_samesite_setting():
+    """'none' is what a cross-site deployment needs; anything else must be rejected at startup
+    rather than producing a cookie the browser silently drops."""
+    base = {"DATABASE_URL": "postgresql://user:pw@localhost:5432/db"}
+    assert Settings(**base).cookie_samesite == "lax"
+    assert Settings(**base, COOKIE_SAMESITE="none").cookie_samesite == "none"
+    with pytest.raises(ValidationError):
+        Settings(**base, COOKIE_SAMESITE="bogus")
 
 
 def test_row_level_security_isolates_lecturers(client):
