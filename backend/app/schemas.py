@@ -32,3 +32,38 @@ class HealthOut(BaseModel):
     status: Literal["ok"]
     env: str
     database: Literal["ok", "error"]
+
+
+class ImportedSubmission(BaseModel):
+    """One file's outcome. FR-03: a bad file is reported, it does not fail the batch."""
+
+    filename: str
+    status: Literal["imported", "failed"]
+    submission_id: UUID | None = None
+    pseudonym: str | None = None
+    segmentation_method: str | None = None
+    has_ai_output: bool | None = None
+    removed_by_class: dict[str, int] = Field(default_factory=dict)
+    warnings: list[str] = Field(default_factory=list)
+    error: str | None = None
+
+
+class ImportResult(BaseModel):
+    assignment_id: UUID
+    files: list[ImportedSubmission]
+
+
+class SubmissionOut(BaseModel):
+    id: UUID
+    assignment_id: UUID
+    pseudonym: str
+    segmentation_status: Literal["pending", "segmented", "confirmed", "failed"]
+    has_ai_output: bool
+    analysis_chars: int
+    import_warnings: list[str] = Field(default_factory=list)
+
+
+class SegmentationPatch(BaseModel):
+    """The lecturer's corrected boundary, as an offset into the combined document text."""
+
+    analysis_start: int = Field(ge=0)
