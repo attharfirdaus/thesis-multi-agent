@@ -81,10 +81,14 @@ exists — which is why both roles were created before migrating.
 
 ## 3. Render — create the Free web service
 
-`render.yaml` at the repository root encodes the service below, so prefer the blueprint: **New →
-Blueprint → pick the repo** creates and connects it in one pass. If the file and this table disagree,
-the file wins. Use the table only when creating the service by hand (**New → Web Service → Build and
-deploy from a Git repository**):
+**Do not use the Blueprint flow — it is the one path that asks for payment information.** Render's
+public API declares `402 Payment Required` ("You must enter payment information to perform this
+request") on `POST /services`, which is the endpoint a Blueprint uses to create a service; a 2026 user
+report describes the same thing — "Blueprint deployment also requires a card on file" — and reports
+that creating the service by hand worked instead. Render's own tutorial, by contrast, states:
+"This tutorial uses free Render resources. **No payment is required.**"
+
+Create it by hand: **New → Web Service → Build and deploy from a Git repository**, then set:
 
 | Field | Value |
 | --- | --- |
@@ -97,6 +101,10 @@ deploy from a Git repository**):
 | Region | **Singapore** |
 | Health Check Path | `/healthz` |
 | Auto-Deploy | Yes (every push to `main` redeploys) |
+
+`render.yaml` in the repository records the same configuration. It sets `plan: free` deliberately:
+Render's Blueprint spec says that **omitting** the plan field makes it default to a paid `0.5c-512mb`
+instance, which is exactly the kind of default that turns a free deploy into a payment prompt.
 
 - **Runtime Docker** reuses `backend/Dockerfile` unchanged; the free plan supports Docker builds.
 - **Free instance** is 0.1 CPU / 512 MB RAM — the bottom edge of the backend's estimated ≈250–400 MB

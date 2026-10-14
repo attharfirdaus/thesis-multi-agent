@@ -64,7 +64,7 @@ provider survey is in [`docs/phase-1/phase1-hosting-free-tiers.md`](./docs/phase
 
 | Service | Free tier | Notes |
 | --- | --- | --- |
-| Render free web service | 0.1 CPU / 512 MB, 750 instance-hours/month, 5 GB egress, 500 build minutes, HTTPS + 2 custom domains, responses up to 100 min | **no credit card required**; Singapore region; sleeps after 15 min idle (~1 min cold start); Render may suspend a free service that generates heavy service-initiated traffic — its own examples are external databases and external APIs, which is this app's pattern (`docs/phase-2/cardfree-paas.md`) |
+| Render free web service | 0.1 CPU / 512 MB, 750 instance-hours/month, 5 GB egress, 500 build minutes, HTTPS + 2 custom domains, responses up to 100 min | **no card on the manual path** — create it with New → Web Service → Free; the Blueprint flow asks for payment information, and an omitted `plan` field defaults to a paid instance. Singapore region; sleeps after 15 min idle (~1 min cold start); Render may suspend a free service that generates heavy service-initiated traffic — its own examples are external databases and external APIs, which is this app's pattern (`docs/phase-2/billing-free-hosts.md`) |
 | Render Postgres (free) | 1 GB, **expires 30 days after creation and is then deleted** | do not use — the database is Neon |
 | Neon | 1 GB/project (20 GB account cap), 100 CU-hrs/project/month; scale-to-zero after 5 min idle, auto-wake | Singapore `aws-ap-southeast-1`; PgBouncer transaction-mode pooler; no data deleted at the cap (docs/phase-2/arch-data-layer.md) |
 | Cloudflare Workers AI | 10,000 Neurons/day (≈0.3–1.1M input tokens depending on model) | no training on or sharing of Customer Content |
