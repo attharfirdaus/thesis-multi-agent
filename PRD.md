@@ -258,7 +258,8 @@ System scores, lecturer overrides are stored as separate records against the sam
 | --- | --- | --- |
 | User | id, email, name, role | Roles: lecturer, admin |
 | Assignment | id, owner\_id, title, course, prompt\_text, rubric\_version\_id | One lecturer owns it |
-| Submission | id, assignment\_id, pseudonym, ai\_output\_text, student\_analysis\_text, segmentation\_status | Pseudonym only; no real name here. **No uploaded file, no filename and no unredacted text is stored** — documents are parsed in memory, redacted, and discarded. Only the two redacted segments persist, because scores and evidence offsets point at them |
+| Submission | id, assignment\_id, pseudonym, ai\_output\_text, student\_analysis\_text, segmentation\_status, import\_warnings | Pseudonym only; no real name here. **No uploaded file, no filename and no unredacted text is stored** — documents are parsed in memory, redacted, and discarded. Only the two redacted segments persist, because scores and evidence offsets point at them. `import_warnings` holds extraction caveats (an image-only page, a file with no AI segment); the file is gone by then, so they cannot be recomputed later |
+| RedactionEvent | id, submission\_id, cls, count | **Counts only.** One row per identifier class removed from a submission. The removed value is never written anywhere — recording it would defeat FR-04 |
 | StudentIdentity | submission\_id, real\_identifier | Separate table, row-level access for the owner only |
 | RubricVersion | id, version, dimensions, levels, indicators, descriptors | Immutable once used in a run |
 | PromptVersion | id, agent\_name, version, template | Immutable once used in a run |
