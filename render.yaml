@@ -1,0 +1,30 @@
+# Render Blueprint — https://render.com/docs/blueprint-spec
+#
+# One free web service running the FastAPI backend. The instance type is `free` (0.1 CPU /
+# 512 MB) and the region is Singapore, matching Neon and the frontend's users.
+#
+# The secrets are deliberately absent: `sync: false` means Render prompts for the value in the
+# dashboard and stores it, so no credential lives in this repository. DATABASE_URL is the Neon
+# *pooled* URL for the `thesis_app` role.
+services:
+  - type: web
+    name: thesis-multi-agent-api
+    runtime: docker
+    plan: free
+    region: singapore
+    rootDir: backend
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /healthz
+    autoDeploy: true
+    envVars:
+      - key: ENV
+        value: production
+      # The service is served over HTTPS, so the session cookie must be Secure.
+      - key: COOKIE_SECURE
+        value: "true"
+      # Exact frontend origin; JSON list, matching backend/app/config.py.
+      - key: ALLOWED_ORIGINS
+        value: '["https://thesis-multi-agent.vercel.app"]'
+      # Neon pooled connection string — set in the dashboard, never committed.
+      - key: DATABASE_URL
+        sync: false

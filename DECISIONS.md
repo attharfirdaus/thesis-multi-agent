@@ -5,7 +5,27 @@ Every provider/model/library fact cited in this project carries a source URL and
 
 ## Open decisions
 
-No model or provider decision remains open. The hosting decisions (O-2, O-3, O-5) were re-taken on 2026-10-07 — see the newest entry — and supersede the 2026-10-06 VM entry below, which is kept as the record of why the VM was chosen and why it was then dropped. What is still open lives in PRD section 14 — the supervisors' metacognitive rubric, the few-shot calibration examples for Bloom levels with no real data, institutional ethics clearance, the validation-subset size, the SUS instrument, and the feedback-text format.
+No model or provider decision remains open. The hosting decisions (O-2, O-3, O-5) were re-taken twice — on 2026-10-07 (VM dropped) and again on 2026-10-14 (Cloud Run dropped for a card-free host) — see the newest entries; the older ones are kept as the record of what was chosen and why it changed. What is still open lives in PRD section 14 — the supervisors' metacognitive rubric, the few-shot calibration examples for Bloom levels with no real data, institutional ethics clearance, the validation-subset size, the SUS instrument, and the feedback-text format.
+
+## 2026-10-14 — Backend host changed again: Render Free (no card available)
+
+**Decision.** The backend runs as a **Render Free web service** in Singapore, built from the existing `backend/Dockerfile` through `render.yaml`. Everything else stands: Neon PostgreSQL (Singapore), the Vercel frontend, Cloudflare Workers AI. This supersedes the Cloud Run decision of 2026-10-07 (O-2).
+
+**Why.** Atthar cannot obtain a Google Cloud billing account — the card is rejected with `OR_MIVEM_02`, which "generally indicate[s] that Google Payments was unable to complete the payment method verification". That is an issuer/card-type failure, not a form-entry one, and Cloud Run requires an active billing account. Cloud Run is therefore *payment*-blocked, not technically blocked.
+
+**What was verified before switching (2026-10-14).** Render is the only card-free, durable, ASGI-capable host found: "No credit card is required"; free web services are 0.1 CPU / 512 MB with 750 instance-hours per month (more than a 31-day month), a Singapore region, HTTPS with custom domains, native Python with `uv.lock` detection or a Dockerfile, and documented responses of up to 100 minutes. Evidence: `docs/phase-2/cardfree-paas.md`, `cardfree-serverless.md`.
+
+**Alternatives rejected, each with the reason:** Hugging Face Spaces (Gradio/Docker Spaces need PRO, and only ports 80/443/8080 are allowed, so Neon on 5432 is unreachable); Koyeb (card plus a $29 pre-authorisation hold, and new signups are Pro-only); Fly.io (no free tier); Railway ($1/month credit cannot keep a service online); Northflank and Qoddi (payment method mandatory); PythonAnywhere (restricted outbound, WSGI-first, 5-minute worker kill); Back4App Containers (the free container lives 60 minutes); AWS Lambda (card-free at signup, but the Free plan expires after six months and the account is then suspended with the data erased); Red Hat OpenShift Developer Sandbox (card-free and Python-capable, but a 30-day trial); Modal (its billing docs require a payment method on file — a second report read the signup page as card-free, so treat Modal as uncertain rather than available); Cloudflare Workers (128 MB and 10 ms CPU, too small for this app); Vercel Hobby for the API (300-second cap, and its free tier is permitted to use content for product improvement); Google Cloud Starter Tier (genuinely card-free Cloud Run, but it only accepts applications built inside Google AI Studio and states "You can't enable other Google Cloud APIs within that same project", so this image cannot go there).
+
+**Risks accepted, named rather than hidden:**
+
+1. Render "may suspend a Free web service that initiates an uncommonly high volume of traffic over the public internet", and its own examples include "Accessing an external database" and "Invoking external APIs" — precisely this application's pattern. There is no published threshold and the only remedy is a paid plan.
+2. A 15-minute idle spin-down with a ~one-minute cold start.
+3. "Render might restart a Free web service at any time" — survivable only because LangGraph state is checkpointed in Postgres and jobs are resumable, which the PRD already required.
+4. 0.1 CPU / 512 MB sits at the bottom edge of the estimated 250–400 MB footprint.
+5. The 5 GB monthly egress allowance is shared with the LLM API calls.
+
+**Escape hatch.** If Render suspends the service or the instance proves too small, Modal Starter or Leapcell can run the batch, and Cloud Run becomes possible again if a card ever works. None of those moves changes the application: same image, same Neon, same frontend.
 
 ## 2026-10-07 — Architecture reversed: no virtual machine (decided by Atthar)
 
