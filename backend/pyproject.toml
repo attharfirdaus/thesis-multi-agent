@@ -26,6 +26,8 @@ dependencies = [
     "langgraph-checkpoint-postgres==3.1.2",
     # The provider client speaks HTTP at runtime; httpx was previously only a test dependency.
     "httpx==0.28.1",
+    # XLSX export (FR-12). Latest stable, verified on PyPI 2026-10-15.
+    "openpyxl==3.1.5",
 ]
 # Phase 3 adds ingestion; verify versions when they are actually used.
 

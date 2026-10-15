@@ -9,7 +9,7 @@
  * back in a header (double submit).
  */
 
-const API_BASE = process.env.NEXT_PUBLIC_API_BASE ?? "";
+export const API_BASE = process.env.NEXT_PUBLIC_API_BASE ?? "";
 
 export type User = { id: string; email: string; name: string; role: "lecturer" | "admin" };
 
@@ -39,6 +39,18 @@ const MESSAGES_ID: Record<string, string> = {
   "Session not found.": "Sesi tidak ditemukan. Silakan masuk kembali.",
   "CSRF check failed.": "Permintaan ditolak. Muat ulang halaman lalu coba lagi.",
   "Too many login attempts. Try again later.": "Terlalu banyak percobaan masuk. Coba lagi nanti.",
+  "No rubric version is seeded for this account; run scripts/seed_rubric.py first.":
+    "Rubrik belum tersedia untuk akun ini. Hubungi pengelola sistem untuk menyiapkan rubrik.",
+  "Assignment not found.": "Tugas tidak ditemukan.",
+  "Submission not found.": "Kiriman tidak ditemukan.",
+  "Run not found.": "Penilaian tidak ditemukan.",
+  "Score not found.": "Nilai tidak ditemukan.",
+  "An override needs a new level and a reason.":
+    "Perubahan nilai memerlukan tingkat baru dan alasan singkat.",
+  "new_level must be one of the rubric's levels.": "Tingkat yang dipilih tidak ada di dalam rubrik.",
+  "No feedback has been generated for this submission yet.":
+    "Umpan balik belum tersedia untuk kiriman ini.",
+  "The student's analysis cannot be empty.": "Analisis mahasiswa tidak boleh kosong.",
 };
 
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
@@ -46,7 +58,8 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
     ...init,
     credentials: "include",
     headers: {
-      "Content-Type": "application/json",
+      // A multipart body carries its own boundary; setting the JSON type here would break it.
+      ...(init.body instanceof FormData ? {} : { "Content-Type": "application/json" }),
       "X-CSRF-Token": csrfToken(),
       ...(init.headers ?? {}),
     },
@@ -67,6 +80,108 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   return (await response.json()) as T;
 }
 
+/** Job counts per status (`queued`, `running`, `done`, `failed`) — PRD §10 `Job`. */
+export type JobCounts = Record<string, number>;
+
+export type RunSummary = { id: string; status: string; jobs: JobCounts };
+
+export type AssignmentSummary = {
+  id: string;
+  title: string;
+  course: string;
+  prompt_text: string | null;
+  created_at: string;
+  submission_count: number;
+  latest_run: RunSummary | null;
+};
+
+/** Fields the frozen contract does not pin down are optional, so a shape change cannot crash a page. */
+export type SubmissionSummary = {
+  id: string;
+  pseudonym: string;
+  segmentation_status: string;
+  review_flags?: string[];
+  import_warnings?: string[];
+};
+
+export type AssignmentDetail = AssignmentSummary & {
+  submissions: SubmissionSummary[];
+  runs: RunSummary[];
+};
+
+export type Rubric = { version: string; levels: string[]; indicators: string[] };
+
+export type Evidence = { quote: string; start_offset: number; end_offset: number };
+
+export type Score = {
+  id: string;
+  dimension: "cognitive" | "metacognitive";
+  indicator: string | null;
+  level: string;
+  rationale: string | null;
+  evidence: Evidence[];
+};
+
+export type Feedback = {
+  generated_text: string | null;
+  edited_text: string | null;
+  edited_by: string | null;
+  exported_at: string | null;
+};
+
+export type Review = {
+  system_score_id: string;
+  action: "accept" | "override";
+  new_level: string | null;
+  reason: string | null;
+  reviewed_at: string;
+};
+
+export type SubmissionDetail = {
+  id: string;
+  assignment_id: string;
+  pseudonym: string;
+  segmentation_status: string;
+  review_flags?: string[];
+  import_warnings?: string[];
+  created_at?: string;
+  ai_output_text: string | null;
+  student_analysis_text: string | null;
+  rubric: Rubric | null;
+  run: { id: string; status: string; mode: string } | null;
+  scores: Score[];
+  feedback: Feedback | null;
+  reviews: Review[];
+};
+
+export type ImportedFile = {
+  filename: string;
+  status: "imported" | "failed";
+  pseudonym?: string | null;
+  warnings?: string[];
+  error?: string | null;
+};
+
+export type ImportResult = { assignment_id: string; files: ImportedFile[] };
+
+export type RunResults = {
+  run_id: string;
+  status: string;
+  submissions: {
+    submission_id: string;
+    pseudonym: string;
+    review_flags?: string[];
+    feedback_text: string | null;
+    scores: {
+      dimension: "cognitive" | "metacognitive";
+      indicator: string | null;
+      level: string;
+      rationale: string | null;
+      evidence: Evidence[];
+    }[];
+  }[];
+};
+
 export const api = {
   me: () => request<{ user: User }>("/auth/me"),
 
@@ -83,4 +198,53 @@ export const api = {
     }),
 
   logout: () => request<void>("/auth/logout", { method: "POST" }),
+
+  listAssignments: () => request<AssignmentSummary[]>("/assignments"),
+
+  createAssignment: (body: { title: string; course: string; prompt_text?: string }) =>
+    request<AssignmentSummary>("/assignments", { method: "POST", body: JSON.stringify(body) }),
+
+  getAssignment: (id: string) => request<AssignmentDetail>(`/assignments/${id}`),
+
+  uploadSubmissions: (assignmentId: string, files: File[]) => {
+    const form = new FormData();
+    for (const file of files) form.append("files", file);
+    return request<ImportResult>(`/assignments/${assignmentId}/submissions`, {
+      method: "POST",
+      body: form,
+    });
+  },
+
+  getSubmission: (id: string) => request<SubmissionDetail>(`/submissions/${id}`),
+
+  patchSegmentation: (id: string, analysisStart: number) =>
+    request<unknown>(`/submissions/${id}/segmentation`, {
+      method: "PATCH",
+      body: JSON.stringify({ analysis_start: analysisStart }),
+    }),
+
+  createRun: (assignmentId: string, mode = "multi_agent") =>
+    request<RunSummary>(`/assignments/${assignmentId}/runs?mode=${mode}`, { method: "POST" }),
+
+  processRun: (runId: string, limit: number) =>
+    request<RunSummary>(`/runs/${runId}/process?limit=${limit}`, { method: "POST" }),
+
+  getRun: (runId: string) => request<RunSummary>(`/runs/${runId}`),
+
+  getRunResults: (runId: string) => request<RunResults>(`/runs/${runId}/results`),
+
+  reviewScore: (
+    scoreId: string,
+    body: { action: "accept" | "override"; new_level?: string; reason?: string },
+  ) =>
+    request<Review>(`/system_scores/${scoreId}/review`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+
+  patchFeedback: (submissionId: string, editedText: string) =>
+    request<Feedback>(`/submissions/${submissionId}/feedback`, {
+      method: "PATCH",
+      body: JSON.stringify({ edited_text: editedText }),
+    }),
 };

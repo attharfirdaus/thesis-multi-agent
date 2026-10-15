@@ -7,6 +7,93 @@ Every provider/model/library fact cited in this project carries a source URL and
 
 No model or provider decision remains open. The hosting decisions (O-2, O-3, O-5) were re-taken twice — on 2026-10-07 (VM dropped) and again on 2026-10-14 (Cloud Run dropped for a card-free host) — see the newest entries; the older ones are kept as the record of what was chosen and why it changed. What is still open lives in PRD section 14 — the supervisors' metacognitive rubric, institutional ethics clearance, the validation-subset size, the SUS instrument, the feedback-text format, and how the two synthetic calibration examples are validated. The few-shot calibration itself is settled: Atthar supplied it on 2026-10-15.
 
+## 2026-10-15 (late) — Phase 5: the lecturer UI, built and walked through on the real stack
+
+Scope from PRD §13's phase-5 line, against the P0 requirements behind it: assignment list and creation
+(FR-02), upload with per-file results (FR-03), boundary correction (FR-05), run controls with progress and
+resume (FR-06), results table (FR-09), submission detail with highlighted evidence (FR-10), override with a
+required reason (FR-11), CSV and XLSX export (FR-12), per-score explanation (FR-14), editable feedback
+(FR-19). Screens: `/dasbor`, `/tugas/[id]`, `/tugas/[id]/hasil`, `/kiriman/[id]`.
+
+- **Eight new endpoints** (`GET/POST /assignments`, `GET /assignments/{id}`, `GET /submissions/{id}`,
+  `POST /system_scores/{id}/review`, `PATCH /submissions/{id}/feedback`, `GET /runs/{id}/export.csv|.xlsx`).
+  The contract was frozen before the work was split, so the UI was written against the shapes rather than
+  against whatever happened to exist. Options considered: reusing `/runs/{id}/results` for the detail view
+  (rejected — the detail needs the texts, the rubric of the scoring run, the reviews and the feedback in one
+  read, and the run view does not carry them).
+- **An override is a new `lecturer_reviews` row; `system_scores` is never updated** (FR-11), so system-versus-
+  lecturer agreement stays computable after the fact. The reason is enforced by the database constraint *and*
+  by the API, which answers 422 before the insert; the new level must be one of the levels the scoring run
+  froze. Verified live: an override without a reason is rejected, with one it is stored.
+- **Machine codes stay in the API; the Indonesian lives in the UI.** `needs_review`,
+  `cognitive_agent_failed`, and the rest are stable identifiers the thesis can count, and `absent` is the
+  stored level for a not-present indicator. PRD §9 forbids that vocabulary in front of a lecturer, so the
+  translation sits in `frontend/lib/labels.ts` (flags, presence levels and extraction warnings in one place),
+  with an unknown value falling back to a generic sentence instead of printing itself. The **export
+  deliberately keeps the raw values** — a research file is joined by machine, not read for prose.
+- **Export shape: one row per evidence span, plus a row for a score whose quote could not be located**, with
+  the run's metadata columns (`run_id`, `mode`, `model`, `temperature`, `seed`, `rubric_version`,
+  `started_at`, `finished_at`) because FR-13 makes the run the unit of traceability. CSV carries a UTF-8 BOM
+  so Excel reads Indonesian text as Indonesian; XLSX is `openpyxl==3.1.5`, the only new dependency, added
+  for the half of FR-12 the standard library cannot do.
+- **The detail response gained `assignment_id`.** Two lines, because a detail page whose only exit is the
+  browser's back button is a dead end.
+- **Boundary correction moves the boundary; it does not edit text.** FR-05 asks for the boundary, the
+  endpoint takes an offset, so the screen shows read-only previews and one range handle. A pair of textareas
+  that silently cannot save was rejected as a trap.
+
+**Three defects found while integrating, none of which a test would have caught:**
+
+1. **The combined-document separator.** `PATCH /submissions/{id}/segmentation` defines its document as
+   `ai_output_text + "\n" + analysis`; the editor reconstructed it with a space, so every dragged boundary
+   was off by one character and the default position happened to hide it. Fixed in the UI, with the rule and
+   its source named in a comment, and pinned by the runnable check. No backend test crosses the API/UI
+   boundary, which is exactly why this survived a green suite.
+2. **`runs.started_at` was never written by anyone** (found while building the export, which emitted an empty
+   column). Now stamped on the first job claim rather than at creation, so a run queued overnight reports
+   when it actually began; the `is null` guard keeps a resumed pass from moving it.
+3. **`system_scores.level = 'absent'`** was rendered raw in the results table and the detail card, the same
+   PRD §9 violation as the flags. Mapped in the UI now; the export is unchanged.
+
+**Verification.** 120 backend tests (9 new, including "a second lecturer reaches nothing" across every new
+endpoint, and two mutation checks by the implementer that each broke a test on purpose), ruff and mypy clean.
+Frontend: `npx tsc --noEmit`, `npm run lint` and a production build clean, plus `npm run check:evidence`
+(9 assertion groups over the offset slicer, the document join and the flag sentences — zero-dependency, run
+by Node's own TypeScript support). My own live pass ran against the real backend and the real provider with a
+throwaway account: two archived PDFs imported and scored, a broken file rejected with an Indonesian sentence
+and its raw error behind a disclosure, both screens read, one override submitted through the UI and one score
+accepted (the page reporting "Tinjauan terakhir: diubah menjadi C6"), the feedback editor saved, and the CSV
+downloaded by clicking the link (`run-<id>-scores.csv`, 7,259 bytes, filename from `Content-Disposition`).
+The email in the UI came from the throwaway account, which was deleted afterwards along with its run; the
+owner's own database still holds only his account, the seeded rubric and the calibration.
+
+**Stated gaps rather than hidden ones** (also in `docs/phase-5/design.md`): the results table shows review
+*flags*, not whether a lecturer already overrode a score; per-file ingest errors carry no error code, so the
+UI shows a generic Indonesian sentence plus a technical disclosure; `feedback.exported_at` is never stamped
+because no requirement says when and a GET should not write; the project has no JavaScript test runner, so one
+runnable check covers the only non-trivial frontend logic; `single_agent` mode and run-to-run variance are
+still absent (phase 6 / PRD §14). **Atthar's own walkthrough — "one lecturer, no help given" — has not
+happened yet; that is his gate, and this entry does not claim it.**
+
+## 2026-10-15 (night) — Phase 4 gate approved by Atthar; phase 5 (lecturer UI) begins
+
+Atthar approved the phase-4 gate after the real-provider run above and asked for phase 5 to be built
+("Setujui gate fase 4, bangun UI fase 5"). The gate as PRD §13 states it — *one batch evaluates end-to-end
+with evidence and an explanation per score* — was demonstrated on the four archived submissions against
+Cloudflare Workers AI, with the numbers recorded in the entry above. Approval was given knowing the two
+gaps stated there: `seed` unexercised and run-to-run variance unimplemented.
+
+**Still open, and not decided by this approval:** which phase owns PRD §11's run-to-run variance (3–5
+repeats per dimension, mean ± SD). He chose to proceed to phase 5 with the question open; phase 5 does not
+implement it, and no phase-5 screen may imply that a stored score is stable across calls.
+
+Phase 5 scope, from PRD §13 ("Results table, submission detail with evidence and plain-language
+explanation, feedback text editor, override, export") and the P0 requirements behind it: FR-02 assignment
+create/list, FR-03 upload, FR-06 run progress, FR-09 results table, FR-10 detail with highlighted
+evidence, FR-11 override with a required reason, FR-12 CSV/XLSX export, FR-14 explanation per score,
+FR-19 editable feedback. Its gate is a walkthrough with one lecturer and no help given — Atthar's, not the
+agent's.
+
 ## 2026-10-15 (evening) — Phase 4 gate run against the real provider: the four archived submissions
 
 First run with no stub. `@cf/google/gemma-4-26b-a4b-it`, `LLM_TEMPERATURE=0`, `LLM_SEED` unset, the four

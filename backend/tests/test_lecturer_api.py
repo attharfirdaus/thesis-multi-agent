@@ -1,0 +1,359 @@
+"""Phase-5 gate: the lecturer's own flow over a scored batch, and the walls around it.
+
+The pipeline is stubbed just as in phase 4 (`seeded`); what is exercised here is this phase's API.
+Two families of assertions matter most: an override is a second row that leaves the system score
+alone, because the agreement study depends on holding both (FR-11, PRD §12); and another lecturer's
+rows are never reachable, not even by id.
+"""
+
+import csv
+import io
+import uuid
+
+import openpyxl
+from conftest import INDICATORS, LEVELS, QUOTE_COGNITIVE
+
+from app import db
+from app.routers.export import COLUMNS
+
+OTHER_LECTURER = {
+    "email": "lain@example.ac.id",
+    "name": "Dosen Lain",
+    "password": "kata-sandi-panjang-2026",
+}
+
+
+def _run_batch(seeded) -> str:
+    """Evaluate the seeded batch once and return the run id."""
+    client, csrf = seeded["client"], seeded["csrf"]
+    created = client.post(
+        f"/assignments/{seeded['assignment']}/runs", headers={"X-CSRF-Token": csrf}
+    )
+    assert created.status_code == 201, created.text
+    run_id = created.json()["id"]
+    processed = client.post(f"/runs/{run_id}/process?limit=5", headers={"X-CSRF-Token": csrf})
+    assert processed.status_code == 200, processed.text
+    assert processed.json()["processed"] == 1, processed.text
+    return run_id
+
+
+def _csrf(client) -> dict:
+    return {"X-CSRF-Token": client.cookies.get("ta_csrf")}
+
+
+def _score_id(user, run_id: str, dimension: str = "cognitive") -> uuid.UUID:
+    with db.tenant_tx(user) as conn:
+        return conn.execute(
+            "select id from system_scores where run_id = %s and dimension = %s",
+            (run_id, dimension),
+        ).fetchone()[0]
+
+
+def test_assignment_list_reports_counts_and_latest_run(seeded):
+    run_id = _run_batch(seeded)
+    listed = seeded["client"].get("/assignments").json()
+
+    assert [row["id"] for row in listed] == [str(seeded["assignment"])]
+    entry = listed[0]
+    assert entry["title"] == "Tugas Risiko"
+    assert entry["course"] == "MRTI"
+    assert entry["submission_count"] == 1
+    assert entry["latest_run"]["id"] == run_id
+    assert entry["latest_run"]["status"] == "done"
+    assert entry["latest_run"]["jobs"] == {"done": 1}
+
+
+def test_create_assignment_uses_the_newest_rubric(seeded):
+    client, csrf = seeded["client"], seeded["csrf"]
+    created = client.post(
+        "/assignments",
+        json={"title": "Tugas Kedua", "course": "MRTI", "prompt_text": "Apa itu risiko?"},
+        headers={"X-CSRF-Token": csrf},
+    )
+    assert created.status_code == 201, created.text
+    body = created.json()
+    assert body["submission_count"] == 0
+    assert body["latest_run"] is None
+
+    with db.tenant_tx(seeded["user"]) as conn:
+        rubric = conn.execute(
+            "select rv.version from assignments a join rubric_versions rv on rv.id = a.rubric_version_id "
+            "where a.id = %s",
+            (body["id"],),
+        ).fetchone()[0]
+    assert rubric == 1
+
+    detail = client.get(f"/assignments/{body['id']}").json()
+    assert detail["submissions"] == []
+    assert detail["runs"] == []
+
+
+def test_create_assignment_without_a_rubric_is_a_409(client):
+    client.post("/auth/signup", json=OTHER_LECTURER)
+    response = client.post(
+        "/assignments", json={"title": "Tugas", "course": "MRTI"}, headers=_csrf(client)
+    )
+    assert response.status_code == 409
+    assert response.json()["detail"] == (
+        "No rubric version is seeded for this account; run scripts/seed_rubric.py first."
+    )
+
+
+def test_detail_shows_the_latest_run_and_its_rubric(seeded):
+    first = _run_batch(seeded)
+    second = _run_batch(seeded)
+
+    response = seeded["client"].get(f"/submissions/{seeded['submission']}")
+    assert response.status_code == 200, response.text
+    body = response.json()
+
+    assert body["run"] == {"id": second, "status": "done", "mode": "multi_agent"}
+    assert body["run"]["id"] != first, "the detail view must follow the newest run, not the first"
+    assert body["assignment_id"] == str(seeded["assignment"]), "the detail screen links back to it"
+    assert body["rubric"] == {"version": "1", "levels": LEVELS, "indicators": INDICATORS}
+    assert body["student_analysis_text"]
+    assert body["pseudonym"].startswith("S-")
+
+    indicators = {s["indicator"] for s in body["scores"] if s["dimension"] == "metacognitive"}
+    assert indicators == set(INDICATORS)
+    cognitive = next(s for s in body["scores"] if s["dimension"] == "cognitive")
+    assert cognitive["level"] == "C4"
+    assert cognitive["rationale"]
+    assert cognitive["evidence"][0]["quote"] == QUOTE_COGNITIVE
+    assert body["feedback"]["generated_text"]
+    assert body["feedback"]["edited_text"] is None
+    assert body["reviews"] == []
+
+    assignment = seeded["client"].get(f"/assignments/{seeded['assignment']}").json()
+    assert [run["id"] for run in assignment["runs"]] == [second, first]
+    assert assignment["latest_run"]["id"] == second
+    assert assignment["submission_count"] == 1
+    assert [s["id"] for s in assignment["submissions"]] == [str(seeded["submission"])]
+    assert assignment["submissions"][0]["analysis_chars"] > 0
+    assert assignment["submissions"][0]["review_flags"] == []
+
+
+def test_detail_of_an_unscored_submission_is_not_an_error(seeded):
+    body = seeded["client"].get(f"/submissions/{seeded['submission']}").json()
+    assert body["run"] is None
+    assert body["rubric"] is None
+    assert body["scores"] == []
+    assert body["feedback"] is None
+
+
+def test_override_needs_a_reason_and_a_known_level(seeded):
+    client, csrf = seeded["client"], seeded["csrf"]
+    run_id = _run_batch(seeded)
+    score_id = _score_id(seeded["user"], run_id)
+    url = f"/system_scores/{score_id}/review"
+
+    no_reason = client.post(
+        url, json={"action": "override", "new_level": "C2"}, headers={"X-CSRF-Token": csrf}
+    )
+    assert no_reason.status_code == 422, no_reason.text
+    blank_reason = client.post(
+        url, json={"action": "override", "new_level": "C2", "reason": "   "}, headers={"X-CSRF-Token": csrf}
+    )
+    assert blank_reason.status_code == 422, blank_reason.text
+    invented = client.post(
+        url, json={"action": "override", "new_level": "A1", "reason": "Bukan level rubrik."},
+        headers={"X-CSRF-Token": csrf},
+    )
+    assert invented.status_code == 422, invented.text
+
+    accepted = client.post(url, json={"action": "accept"}, headers={"X-CSRF-Token": csrf})
+    assert accepted.status_code == 201, accepted.text
+    assert accepted.json()["new_level"] is None
+    assert accepted.json()["reason"] is None
+
+    overridden = client.post(
+        url,
+        json={"action": "override", "new_level": "C2", "reason": "Analisisnya baru memahami."},
+        headers={"X-CSRF-Token": csrf},
+    )
+    assert overridden.status_code == 201, overridden.text
+    assert overridden.json()["new_level"] == "C2"
+
+    with db.tenant_tx(seeded["user"]) as conn:
+        score = conn.execute(
+            "select level, rationale from system_scores where id = %s", (score_id,)
+        ).fetchone()
+        reviews = conn.execute(
+            "select action, new_level from lecturer_reviews where system_score_id = %s "
+            "order by reviewed_at",
+            (score_id,),
+        ).fetchall()
+    # FR-11: the system score is the system's, however the lecturer judged it.
+    assert score[0] == "C4"
+    assert score[1] == "Mahasiswa menilai dua kerangka kerja dan membandingkan fokusnya."
+    assert [row[0] for row in reviews] == ["accept", "override"]
+
+    detail = seeded["client"].get(f"/submissions/{seeded['submission']}").json()
+    assert detail["reviews"] == [
+        {
+            "system_score_id": str(score_id),
+            "action": "override",
+            "new_level": "C2",
+            "reason": "Analisisnya baru memahami.",
+            "reviewed_at": overridden.json()["reviewed_at"],
+        }
+    ]
+
+
+def test_feedback_edit_and_blank_clear(seeded):
+    client, csrf = seeded["client"], seeded["csrf"]
+    url = f"/submissions/{seeded['submission']}/feedback"
+
+    early = client.patch(url, json={"edited_text": "Belum ada."}, headers={"X-CSRF-Token": csrf})
+    assert early.status_code == 404, early.text
+
+    _run_batch(seeded)
+    edited = client.patch(
+        url, json={"edited_text": "  Umpan balik yang saya rapikan.  "}, headers={"X-CSRF-Token": csrf}
+    )
+    assert edited.status_code == 200, edited.text
+    assert edited.json()["edited_text"] == "Umpan balik yang saya rapikan."
+    assert edited.json()["generated_text"], "the generated text is kept beside the edit"
+    assert edited.json()["edited_by"] == str(seeded["user"])
+
+    cleared = client.patch(url, json={"edited_text": "   "}, headers={"X-CSRF-Token": csrf})
+    assert cleared.status_code == 200, cleared.text
+    assert cleared.json()["edited_text"] is None
+
+
+# The research dataset's own column order. Spelled out rather than imported: a test that reads the
+# header from the code it checks would pass after any reordering (FR-16).
+EXPECTED_HEADER = [
+    "assignment_title",
+    "submission_pseudonym",
+    "dimension",
+    "indicator",
+    "level",
+    "rationale",
+    "evidence_quote",
+    "start_offset",
+    "end_offset",
+    "review_action",
+    "review_new_level",
+    "review_reason",
+    "reviewed_at",
+    "feedback_text",
+    "run_id",
+    "mode",
+    "model",
+    "temperature",
+    "seed",
+    "rubric_version",
+    "started_at",
+    "finished_at",
+]
+
+
+def test_export_csv_and_xlsx(seeded):
+    client, csrf = seeded["client"], seeded["csrf"]
+    run_id = _run_batch(seeded)
+    score_id = _score_id(seeded["user"], run_id, "metacognitive")
+    client.post(
+        f"/system_scores/{score_id}/review",
+        json={"action": "override", "new_level": "C5", "reason": "Sudah terstruktur."},
+        headers={"X-CSRF-Token": csrf},
+    )
+    client.patch(
+        f"/submissions/{seeded['submission']}/feedback",
+        json={"edited_text": "Versi dosen."},
+        headers={"X-CSRF-Token": csrf},
+    )
+
+    response = client.get(f"/runs/{run_id}/export.csv")
+    assert response.status_code == 200, response.text
+    assert response.headers["content-type"].startswith("text/csv")
+    assert response.headers["content-disposition"] == f'attachment; filename="run-{run_id}-scores.csv"'
+
+    text = response.content.decode("utf-8")
+    assert text.startswith("\ufeff"), "Excel needs the BOM to read Indonesian text"
+    rows = list(csv.reader(io.StringIO(text.removeprefix("\ufeff"))))
+    assert rows[0] == EXPECTED_HEADER
+    assert COLUMNS == EXPECTED_HEADER
+
+    # One row per evidence span, plus one row for a score whose quote failed the evidence check.
+    with db.tenant_tx(seeded["user"]) as conn:
+        expected_rows = conn.execute(
+            "select count(*) from system_scores sc left join evidence e on e.system_score_id = sc.id "
+            "where sc.run_id = %s",
+            (run_id,),
+        ).fetchone()[0]
+        spans = conn.execute(
+            "select count(*) from evidence e join system_scores sc on sc.id = e.system_score_id "
+            "where sc.run_id = %s",
+            (run_id,),
+        ).fetchone()[0]
+    assert spans > 0
+    assert len(rows) - 1 == expected_rows > spans, "a score without a span still exports a row"
+
+    by_pseudonym = {row[1] for row in rows[1:]}
+    assert len(by_pseudonym) == 1
+    cognitive_row = next(row for row in rows[1:] if row[2] == "cognitive")
+    assert cognitive_row[0] == "Tugas Risiko"
+    assert cognitive_row[6] == QUOTE_COGNITIVE
+    assert cognitive_row[13] == "Versi dosen."
+    assert cognitive_row[14] == run_id
+    assert cognitive_row[15] == "multi_agent"
+    assert cognitive_row[19] == "1"
+    assert cognitive_row[16] and cognitive_row[17] is not None and cognitive_row[18] is not None
+
+    reviewed = [
+        row for row in rows[1:] if row[9] not in ("", None)
+    ]
+    assert [(row[9], row[10], row[11]) for row in reviewed] == [
+        ("override", "C5", "Sudah terstruktur.")
+    ]
+
+    # A score with no located quote keeps its row, with empty offsets.
+    empty = next(row for row in rows[1:] if row[6] == "" and row[2] == "metacognitive")
+    assert empty[7] == "" and empty[8] == ""
+
+    book = openpyxl.load_workbook(io.BytesIO(client.get(f"/runs/{run_id}/export.xlsx").content))
+    assert book.sheetnames == ["Scores"]
+    assert [cell.value for cell in book["Scores"][1]] == EXPECTED_HEADER
+    assert book["Scores"].max_row - 1 == expected_rows
+
+
+def test_another_lecturer_reaches_nothing(seeded):
+    client = seeded["client"]
+    run_id = _run_batch(seeded)
+    score_id = _score_id(seeded["user"], run_id)
+
+    client.post("/auth/signup", json=OTHER_LECTURER)
+    headers = _csrf(client)
+
+    assert client.get("/assignments").json() == []
+    assert client.get(f"/assignments/{seeded['assignment']}").status_code == 404
+    assert client.get(f"/submissions/{seeded['submission']}").status_code == 404
+    assert client.get(f"/runs/{run_id}").status_code == 404
+    assert client.get(f"/runs/{run_id}/results").status_code == 404
+    assert client.get(f"/runs/{run_id}/export.csv").status_code == 404
+    assert client.get(f"/runs/{run_id}/export.xlsx").status_code == 404
+    assert (
+        client.post(
+            f"/system_scores/{score_id}/review", json={"action": "accept"}, headers=headers
+        ).status_code
+        == 404
+    )
+    assert (
+        client.patch(
+            f"/submissions/{seeded['submission']}/feedback",
+            json={"edited_text": "Punya saya."},
+            headers=headers,
+        ).status_code
+        == 404
+    )
+    assert (
+        client.post(
+            f"/assignments/{seeded['assignment']}/runs", headers=headers
+        ).status_code
+        == 404
+    )
+
+    with db.tenant_tx(seeded["user"]) as conn:
+        assert conn.execute("select count(*) from lecturer_reviews").fetchone()[0] == 0
+        assert conn.execute("select edited_text from feedback").fetchone()[0] is None

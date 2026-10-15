@@ -293,6 +293,38 @@ def test_process_run_resumes_jobs_left_running_by_a_crash(monkeypatch):
     assert [job["status"] for job in job_rows(lecturer["owner"], lecturer["run"])] == ["done", "queued"]
 
 
+def test_a_run_records_when_it_started_and_keeps_that_moment(monkeypatch):
+    """FR-13 keeps the run's timestamps, and `runs.started_at` was written by nobody until this."""
+    lecturer = make_lecturer(1)
+    with db.tenant_tx(lecturer["owner"]) as conn:
+        enqueue_run(
+            conn,
+            owner_id=lecturer["owner"],
+            run_id=lecturer["run"],
+            submission_ids=lecturer["submissions"],
+        )
+        queued = conn.execute(
+            "select started_at from runs where id = %s", (lecturer["run"],)
+        ).fetchone()[0]
+    assert queued is None, "a run that is only queued has not started"
+
+    stub_graph(monkeypatch)
+    worker.process_run(lecturer["owner"], lecturer["run"])
+    with db.tenant_tx(lecturer["owner"]) as conn:
+        first = conn.execute(
+            "select started_at from runs where id = %s", (lecturer["run"],)
+        ).fetchone()[0]
+    assert first is not None
+
+    # A second pass finds nothing left to claim: it must not move the moment work began.
+    worker.process_run(lecturer["owner"], lecturer["run"])
+    with db.tenant_tx(lecturer["owner"]) as conn:
+        again = conn.execute(
+            "select started_at from runs where id = %s", (lecturer["run"],)
+        ).fetchone()[0]
+    assert again == first
+
+
 def test_a_run_without_calibration_reaches_the_graph_as_an_empty_block(monkeypatch):
     """Passed through empty on purpose: the builders refuse an uncalibrated agent (PRD §6), so
     their refusal is the failure the job records rather than an example this loader invents."""
