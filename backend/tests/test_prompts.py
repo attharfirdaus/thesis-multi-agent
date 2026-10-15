@@ -5,6 +5,9 @@ below is shaped like a RubricVersion row; its values are test data on purpose, b
 several of these tests is that the builder carries whatever the row holds instead of a literal.
 """
 
+import json
+import pathlib
+
 import pytest
 
 from app.agents.prompts import (
@@ -13,22 +16,46 @@ from app.agents.prompts import (
     metacognitive_prompt,
     synthesis_prompt,
 )
-from scripts.seed_rubric import rubric_content, version_to_insert
+from scripts.seed_rubric import _calibration_from, rubric_content, version_to_insert
 
 RUBRIC = {
     "version": 3,
-    "levels": ["Mengingat", "Memahami", "Menerapkan", "Menganalisis", "Mengevaluasi", "Mencipta"],
+    "levels": ["C1", "C2", "C3", "C4", "C5", "C6"],
     "indicators": ["elaborasi", "organisasi", "orientasi", "evaluasi"],
 }
+CALIBRATION_PATH = pathlib.Path(__file__).resolve().parents[1] / "scripts" / "calibration.json"
 ANALYSIS = "Saya membandingkan dua sumber lalu menyimpulkan kelemahan argumennya."
 AI_OUTPUT = "Rangkuman keluaran AI yang dianalisis mahasiswa."
-CALIBRATION = [
-    {
-        "level": "Menganalisis",
-        "evidence_quote": "kalibrasi-contoh-kutipan",
-        "rationale": "kalibrasi-contoh-alasan",
-    }
-]
+CALIBRATION = {
+    "cognitive": {
+        "instructions": "Kalibrasi uji untuk agen kognitif.",
+        "examples": [
+            {
+                "analisis_mhs": "teks contoh",
+                "level": "C4",
+                "evidence_quote": "kalibrasi-contoh-kutipan",
+                "rationale": "kalibrasi-contoh-alasan",
+            }
+        ],
+    },
+    "metacognitive": {
+        "instructions": "Kalibrasi uji untuk agen metakognitif.",
+        "examples": [
+            {
+                "analisis_mhs": "teks contoh",
+                "findings": [
+                    {
+                        "indicator": "evaluasi",
+                        "present": True,
+                        "strength": "kuat",
+                        "evidence_quote": "kalibrasi-contoh-kutipan",
+                        "rationale": "kalibrasi-contoh-alasan",
+                    }
+                ],
+            }
+        ],
+    },
+}
 
 
 def test_levels_and_indicators_come_from_the_rubric_row():
@@ -58,7 +85,17 @@ def test_indicators_come_from_the_rubric_row():
 @pytest.mark.parametrize("build", [cognitive_prompt, metacognitive_prompt])
 def test_empty_calibration_refuses_the_run(build):
     with pytest.raises(MissingCalibration):
-        build(RUBRIC, [], ANALYSIS)
+        build(RUBRIC, {}, ANALYSIS)
+
+
+def test_one_agent_without_its_block_refuses_only_that_agent():
+    """Each agent reads its own block: supplying Bloom examples must not let the metacognitive agent
+    run on them, which is the failure a single shared example list would hide."""
+    only_cognitive = {"cognitive": CALIBRATION["cognitive"]}
+    with pytest.raises(MissingCalibration):
+        metacognitive_prompt(RUBRIC, only_cognitive, ANALYSIS)
+    _, user = cognitive_prompt(RUBRIC, only_cognitive, ANALYSIS)
+    assert "kalibrasi-contoh-alasan" in user
 
 
 def test_synthesis_carries_the_analysis_and_the_ai_output():
@@ -91,10 +128,40 @@ def test_seeder_version_rule_skips_identical_content_and_bumps_changed_content()
     assert version_to_insert(None, changed) == 1
 
 
-def test_seeded_rubric_carries_the_four_srl_codes_and_no_descriptors():
+def test_the_shipped_calibration_reaches_both_prompts_without_its_provenance_notes():
+    """The shipped file is Atthar's content (2026-10-15): Bloom examples for one agent, SRL for the
+    other. Each agent must see only its own block, and the reader-facing provenance notes must stay
+    out of the prompt."""
+    calibration = json.loads(CALIBRATION_PATH.read_text(encoding="utf-8"))
+
+    _, cognitive = cognitive_prompt(RUBRIC, calibration, ANALYSIS)
+    _, metacognitive = metacognitive_prompt(RUBRIC, calibration, ANALYSIS)
+
+    assert "saya susun alur keputusan sendiri untuk tim kami" in cognitive
+    assert "elaborasi" not in cognitive  # the SRL block belongs to the other agent
+    assert "Kualitas analisis tinggi tidak otomatis berarti" in metacognitive  # the zero-code case
+    assert "C4" not in metacognitive
+    for prompt in (cognitive, metacognitive):
+        assert "catatan_sumber" not in prompt
+        assert "SYNTHETIC" not in prompt
+
+
+def test_a_calibration_file_missing_an_agent_block_is_rejected(tmp_path):
+    """A file with only the cognitive block would seed cleanly and fail at the first metacognitive
+    job, so it is refused when it is read."""
+    path = tmp_path / "calibration.json"
+    path.write_text(json.dumps({"cognitive": {"examples": [{"level": "C4"}]}}), encoding="utf-8")
+    with pytest.raises(SystemExit):
+        _calibration_from(str(path))
+
+
+def test_seeded_rubric_carries_the_four_srl_codes_and_the_six_bloom_codes():
     content = rubric_content()
     assert content["indicators"] == ["elaborasi", "organisasi", "orientasi", "evaluasi"]
-    assert len(content["levels"]) == 6
-    assert content["descriptors"]["levels"] == {}
+    assert content["levels"] == ["C1", "C2", "C3", "C4", "C5", "C6"]
+    # The names come from Atthar's calibration (Anderson & Krathwohl). No threshold is seeded: that is
+    # the supervisors' rater guideline's job (PRD §13), and inventing one here would be the mistake.
+    assert content["descriptors"]["levels"]["C4"] == "Analyze"
     assert content["descriptors"]["indicators"] == {}
     assert content["descriptors"]["pending_supervisors"] is True
+    assert "threshold" not in json.dumps(content["descriptors"]).lower()

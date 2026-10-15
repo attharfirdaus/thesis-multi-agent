@@ -326,7 +326,7 @@ Working rules:
 ## 14. Open questions
 
 - [ ] Rubric and rater guideline from the supervisors, to replace the interim G1 (Fan et al., 2025) four-code SRL scheme used as a placeholder for the metacognitive dimension.
-- [ ] Few-shot calibration for the cognitive agent: who writes the example for a Bloom level that has zero real examples in the archived data, and how is that synthetic example validated so it does not bias the agent toward one phrasing? (Replaces the IndoBERT labelling question; the approach is mandatory per section 6, so the examples gate phase 4.)
+- [x] Few-shot calibration for the cognitive agent — **answered 2026-10-15 by Atthar**: six Bloom examples (C1–C4 from the archived submissions, C5 and C6 written as synthetic because no real example exists at those levels) plus five SRL examples for the metacognitive agent, stored as data in `backend/scripts/calibration.json` and seeded into `PromptVersion`. Still open from the same item: how the two synthetic examples are validated so they do not bias the agent toward one phrasing (marking them is not validating them).
 - [ ] Size of the two-lecturer validation subset and how disagreements are resolved (discussion to consensus, or a tie-break rule) — this governs the manual process in section 12, not the app itself.
 - [ ] Multi-agent justification now that both modes use the same kind of model: the argument has to lean on consistency, per-dimension auditability and error localisation rather than raw accuracy, because D1/D2/J3 suggest single-agent few-shot can match or beat multi-agent on accuracy alone (section 12).
 - [ ] Confirm SUS (or another named instrument) for the DSRM usability demonstration, and whether it uses the same two lecturers as the validation study.

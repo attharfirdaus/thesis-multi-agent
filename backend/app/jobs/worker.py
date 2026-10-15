@@ -88,14 +88,10 @@ def _load_state(conn, *, owner_id: UUID, run_id: UUID, submission_id: UUID) -> G
             (row["prompt_version_ids"],),
         )
         calibration = cur.fetchone()
-        # The stored row is a JSON *object* (`{"examples": [...], "interim": true}`) because the seed
-        # script records those flags, while the prompt builders want the example list itself. The
-        # translation belongs here, so neither side has to know the other's shape. An empty list is
-        # passed through rather than filled in: the builders refuse an uncalibrated agent (PRD §6),
-        # and that refusal is the failure this job should show.
-        parsed = json.loads(calibration["template"]) if calibration else []
-        examples = parsed.get("examples", []) if isinstance(parsed, dict) else parsed
-        prompts: dict = {"calibration": examples}
+        # The stored row is the per-agent calibration block plus its provenance flags (Atthar's
+        # content, PRD §14); each prompt builder reads its own agent's slice. A missing row stays an
+        # empty dict so the builders refuse the run instead of skipping the calibration.
+        prompts: dict = {"calibration": json.loads(calibration["template"]) if calibration else {}}
     return GraphState(
         owner_id=str(owner_id),
         run_id=str(run_id),

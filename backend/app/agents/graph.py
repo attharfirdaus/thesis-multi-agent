@@ -65,10 +65,13 @@ def _parsed[ModelT: BaseModel](parsed: object, expected: type[ModelT]) -> ModelT
     return parsed
 
 
-def _calibration(state: GraphState) -> list[dict]:
-    """The seeded few-shot examples. Data, not code: the graph never invents rubric content (PRD §14),
-    and an empty list is refused by `prompts.MissingCalibration` further down."""
-    return list(state.get("prompts", {}).get("calibration") or [])
+def _calibration(state: GraphState) -> dict[str, Any]:
+    """The seeded calibration block, one entry per analysis agent (PRD §14).
+
+    Data, not code: the graph never invents rubric content. An absent or empty block is refused by
+    `prompts.MissingCalibration` further down, per agent, rather than run uncalibrated.
+    """
+    return dict(state.get("prompts", {}).get("calibration") or {})
 
 
 def preprocess(state: GraphState) -> dict[str, Any]:

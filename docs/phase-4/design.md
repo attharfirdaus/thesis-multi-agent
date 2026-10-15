@@ -1,10 +1,10 @@
 # Phase 4 design — the agent pipeline
 
-Constraint that shapes everything below: **this gate can be demonstrated with no provider key, but not
-with no calibration examples.** The graph refuses to score against an empty calibration row (PRD §6), and
-the content of those examples is Atthar's (PRD §14) — so every end-to-end run in this phase, including
-the one recorded at the bottom, uses a clearly-labelled fixture that must never be seeded as the real
-row. `scripts/seed_rubric` therefore writes the calibration row *empty* and flagged `pending_atthar`.
+Two constraints shape what follows. **The gate cannot be demonstrated without calibration examples** —
+the graph refuses to score against an empty block (PRD §6), and the content is Atthar's (PRD §14), which
+he supplied on 2026-10-15; it is real content now, not a fixture. **And it cannot be demonstrated
+against the real provider without a key** — none exists in this environment yet, so every run recorded
+here uses the stub and the model's own behaviour stays unmeasured.
 
 ## The graph (PRD §6)
 
@@ -32,6 +32,31 @@ START → preprocess ─┬→ cognitive      ─┬→ synthesis → evidence �
   missing row and the thesis can report the failure rate honestly. The one synthesis retry is given the
   failure reason; if the retry fails, the first synthesis is kept — a failed retry must not cost a usable
   explanation.
+
+## The calibration block
+
+The calibration is the one piece of prompt content that is not the coding agent's to write (PRD §14), so
+it lives in a file, not in code: `backend/scripts/calibration.json`, seeded into a versioned
+`PromptVersion` row by `scripts/seed_rubric.py --calibration` (that file is the default). It is keyed by
+agent — six Bloom examples for the cognitive agent, five SRL examples for the metacognitive one — because
+two agents with different rubrics cannot share one example list without each being prompted with the
+other's material. A file missing either block is refused when it is read, not at the first job that
+reaches that agent.
+
+Three deliberate alignments came out of adopting it, all recorded in DECISIONS.md:
+
+- the level scale is the six Bloom codes (`C1`…`C6`) with the names as `RubricVersion.descriptors.levels`,
+  because that is what the examples return and what the agents therefore produce;
+- `Strength` is `lemah | sedang | kuat`, the words the calibration uses and the words a lecturer reads;
+- the JSON field names inside the examples were rewritten to the agent schemas (`evidence_quote`,
+  `present`, `indicator`), and the zero-code example is expressed as the schema's own shape. An example
+  whose keys differ from the schema the answer is validated against teaches the wrong shape; this is the
+  only place the supplied text was altered, and it is flagged for Atthar to veto.
+
+`catatan_sumber` — which marks the two synthetic examples and the zero-code case — is stripped when the
+block is rendered, so provenance never becomes model input. Two of the six Bloom examples (C5, C6) are
+synthetic: no real example exists at those levels in the archive, and how they are validated against
+biasing the agent remains an open question in PRD §14.
 
 ## Provider client — the single egress point
 
@@ -99,6 +124,7 @@ was unsure about. FR-09 needs to say which.
 | --- | --- |
 | `tests/test_runs_api.py` | The whole path over HTTP on a synthetic docx: create run → `process` → jobs counted → results with spans and feedback |
 | `tests/test_runs_api.py`, calibration tests | An empty calibration row refuses the run; the refusal reaches the job's `last_error` |
+| `tests/test_prompts.py` | The shipped calibration reaches both prompts, each agent sees only its own block, provenance notes stay out, and a calibration file missing an agent block is refused |
 | `tests/test_graph.py` | Per-agent behaviour: retry on a bad answer, the review flag on a quote that cannot be located, a failed synthesis retry keeping the first synthesis |
 | `tests/test_jobs.py` | Claim exclusivity, `attempts` on failure, a failed submission not failing the batch, stale-lease recovery |
 | `tests/test_real_corpus.py` | The four real archived PDFs in `samples/`: 4 imported → 4 jobs done → run `done`; every returned span reproduces its quote inside the real Indonesian text (`text[start:end] == quote`); feedback present per submission; checkpoints written |
@@ -115,9 +141,8 @@ assertion meaningless.
 - **No real provider call.** No API key exists in this environment, so JSON-mode adherence, latency, the
   retry path against a real 429/5xx, and Bahasa Indonesia scoring quality are all unmeasured. Everything
   PRD §7 says about the model's competence remains the provider's own documentation until a key exists.
-- **The calibration content is empty.** By design (PRD §14): the examples are Atthar's, and the seeded
-  row says `pending_atthar`. A real run therefore refuses until they are supplied — verified, including
-  the job-level error text.
+  The two synthetic calibration examples (C5, C6) can only be judged against a real provider's output,
+  which is a second reason this is the next thing to do.
 - **Run-to-run variance is not implemented (PRD §11).** One LLM call per dimension per submission, not
   3–5 with mean ± SD. Not a silent omission: recorded in DECISIONS.md and raised with Atthar, because it
   changes run semantics and multiplies batch cost.

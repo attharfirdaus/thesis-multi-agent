@@ -1,0 +1,107 @@
+{
+  "_comment": "Kalibrasi few-shot milik Atthar (PRD §14), dijawab 2026-10-15. Disimpan sebagai data dan di-seed ke PromptVersion oleh scripts/seed_rubric.py --calibration. Nama field JSON diselaraskan dengan skema agen (evidence_quote, present, indicator) supaya contoh yang dilihat model sama dengan yang divalidasi pipeline; teks penilaian tidak diubah.",
+  "interim": false,
+  "pending_atthar": false,
+  "source": "Atthar, 2026-10-15 (menjawab PRD §14)",
+  "cognitive": {
+    "instructions": "Anda menilai level kognitif tulisan mahasiswa berdasarkan Taksonomi Bloom revisi (Anderson & Krathwohl, 2001). Mahasiswa diberi tugas menganalisis output AI. Nilai HANYA [ANALISIS_MHS]. Jangan menilai kualitas [OUTPUT_AI].\n\nLevel yang tersedia: C1 Remember, C2 Understand, C3 Apply, C4 Analyze, C5 Evaluate, C6 Create.\n\nPrinsip penilaian:\n- Tentukan level TERTINGGI yang dibuktikan oleh kutipan langsung dari teks.\n- Tanpa kutipan pendukung, level tidak boleh diberikan. Turunkan ke level yang bisa dibuktikan.\n- Panjang tulisan bukan indikator level.\n- Jika mahasiswa hanya mengulang isi [OUTPUT_AI] dengan kata berbeda, itu C2, bukan C4, meskipun terdengar analitis.\n\nKeluarkan JSON sesuai schema. Jangan menulis apa pun di luar JSON.",
+    "examples": [
+      {
+        "output_ai": "Normalisasi database terdiri dari 1NF, 2NF, dan 3NF. 1NF menghilangkan grup berulang, 2NF menghilangkan ketergantungan parsial, 3NF menghilangkan ketergantungan transitif.",
+        "analisis_mhs": "Jadi normalisasi ada tiga bentuk. 1NF untuk grup berulang, 2NF untuk ketergantungan parsial, 3NF untuk ketergantungan transitif. Penjelasan AI sudah lengkap.",
+        "level": "C1",
+        "evidence_quote": "1NF untuk grup berulang, 2NF untuk ketergantungan parsial",
+        "rationale": "Mahasiswa menyalin ulang isi output AI tanpa mengubah struktur atau menambah pemahaman. Tidak ada pemrosesan di luar pengulangan."
+      },
+      {
+        "output_ai": "(sama seperti Contoh 1)",
+        "analisis_mhs": "Intinya normalisasi itu proses bertahap memecah tabel supaya tidak ada data yang tersimpan berulang. Ketergantungan parsial maksudnya kolom yang cuma bergantung ke sebagian primary key, bukan ke seluruhnya. Jadi tiap tahap menyelesaikan satu jenis masalah redundansi.",
+        "level": "C2",
+        "evidence_quote": "Ketergantungan parsial maksudnya kolom yang cuma bergantung ke sebagian primary key",
+        "rationale": "Mahasiswa merumuskan ulang konsep dengan bahasa sendiri dan menjelaskan makna istilah, tetapi belum menerapkan atau membongkar klaim AI."
+      },
+      {
+        "output_ai": "(sama seperti Contoh 1)",
+        "analisis_mhs": "Saya coba terapkan ke tabel transaksi di tugas sebelumnya. Tabel itu punya kolom id_transaksi, id_produk, nama_produk, dan jumlah. Karena nama_produk hanya bergantung pada id_produk padahal primary key-nya gabungan id_transaksi dan id_produk, tabel itu belum 2NF. Maka saya pecah jadi tabel produk terpisah.",
+        "level": "C3",
+        "evidence_quote": "Karena nama_produk hanya bergantung pada id_produk padahal primary key-nya gabungan",
+        "rationale": "Mahasiswa menggunakan aturan dari output AI pada kasus konkret miliknya sendiri dan menghasilkan keputusan desain. Penerapan, bukan sekadar pemahaman."
+      },
+      {
+        "output_ai": "(sama seperti Contoh 1)",
+        "analisis_mhs": "Penjelasan AI menyusun ketiga bentuk seolah berurutan dan setara bobotnya, padahal lompatan dari 1NF ke 2NF menyangkut struktur primary key sedangkan 2NF ke 3NF menyangkut relasi antar atribut non-kunci. Dua hal itu beda jenis masalah. AI juga diam soal asumsi bahwa primary key sudah ditentukan dengan benar sejak awal, padahal justru di situ sumber kesalahan normalisasi paling sering muncul.",
+        "level": "C4",
+        "evidence_quote": "AI juga diam soal asumsi bahwa primary key sudah ditentukan dengan benar sejak awal",
+        "rationale": "Mahasiswa membongkar struktur argumen AI, membedakan jenis masalah antar tahap, dan mengidentifikasi asumsi yang tidak dinyatakan. Pembedahan komponen dan relasi, bukan penilaian benar-salah."
+      },
+      {
+        "output_ai": "(sama seperti Contoh 1)",
+        "analisis_mhs": "Saya cek klaim AI ini ke Elmasri & Navathe dan ternyata tidak salah tapi tidak memadai untuk konteks tugas kita. Untuk sistem OLTP seperti studi kasus kita, berhenti di 3NF memang wajar. Tapi AI menyajikannya sebagai aturan umum tanpa syarat, padahal pada skema pelaporan yang read-heavy, normalisasi sampai 3NF justru menambah biaya join dan praktik yang lazim adalah denormalisasi terkendali. Jadi rekomendasi AI ini hanya valid kalau beban kerjanya transaksional, dan itu tidak pernah dia sebut.",
+        "level": "C5",
+        "evidence_quote": "rekomendasi AI ini hanya valid kalau beban kerjanya transaksional, dan itu tidak pernah dia sebut",
+        "rationale": "Mahasiswa menguji klaim AI terhadap sumber eksternal dan terhadap kriteria konteks penggunaan, lalu memutuskan batas keberlakuannya. Ada judgment berdasarkan kriteria.",
+        "catatan_sumber": "SYNTHETIC — tidak ada contoh nyata di arsip untuk level ini"
+      },
+      {
+        "output_ai": "(sama seperti Contoh 1)",
+        "analisis_mhs": "Dari keterbatasan yang saya temukan, saya susun alur keputusan sendiri untuk tim kami: mulai dari klasifikasi beban kerja (transaksional atau analitik), lalu ambang frekuensi join, baru tentukan target bentuk normal per tabel, bukan per database. Untuk tabel referensi yang jarang berubah saya tetapkan 3NF, untuk tabel agregat pelaporan saya izinkan 2NF dengan catatan refresh terjadwal. Alur ini saya turunkan jadi checklist empat pertanyaan yang bisa dipakai anggota tim lain tanpa harus paham teori normalisasi penuh.",
+        "level": "C6",
+        "evidence_quote": "saya susun alur keputusan sendiri untuk tim kami",
+        "rationale": "Mahasiswa menghasilkan artefak baru — kerangka keputusan dan checklist — yang tidak ada di output AI maupun di materi, disusun dari hasil evaluasinya sendiri.",
+        "catatan_sumber": "SYNTHETIC — tidak ada contoh nyata di arsip untuk level ini"
+      }
+    ]
+  },
+  "metacognitive": {
+    "instructions": "Anda mendeteksi proses self-regulated learning dalam tulisan mahasiswa, menggunakan empat kode proses dari Fan et al. (2025): orientasi, elaborasi, organisasi, evaluasi.\n\nUntuk SETIAP kode, tentukan:\n  present: true | false\n  strength: \"lemah\" | \"sedang\" | \"kuat\"   (hanya jika present true)\n  evidence_quote: kutipan langsung  (wajib jika present true)\n\nPrinsip:\n- Keempat kode dinilai independen. Satu teks bisa memuat nol sampai empat kode.\n- present true tanpa kutipan langsung tidak diperbolehkan.\n- Kode ini tentang PROSES BELAJAR mahasiswa, bukan kualitas isi analisisnya. Analisis yang pintar tapi tanpa jejak monitoring diri tetap bisa nol kode.\n- Ekspresi afektif (\"saya bingung\", \"ini menarik\") bukan kode. Hanya hitung jika disertai tindakan atau refleksi terhadap proses.\n\nKeluarkan JSON sesuai schema. Jangan menulis apa pun di luar JSON.",
+    "examples": [
+      {
+        "analisis_mhs": "Sebelum membaca jawaban AI, saya tentukan dulu apa yang sebenarnya ditanyakan tugas ini: bukan definisi normalisasi, tapi kapan normalisasi layak dihentikan. Jadi saya baca output AI dengan pertanyaan itu di kepala.",
+        "findings": [
+          { "indicator": "orientasi", "present": true, "strength": "kuat", "evidence_quote": "Sebelum membaca jawaban AI, saya tentukan dulu apa yang sebenarnya ditanyakan tugas ini", "rationale": "Mahasiswa menetapkan pemahaman tugas dan tujuan baca sebelum mengerjakan. Perencanaan awal yang eksplisit." },
+          { "indicator": "elaborasi", "present": false, "strength": null, "evidence_quote": "", "rationale": "Tidak ada jejak penghubungan dengan pengetahuan sebelumnya pada teks contoh." },
+          { "indicator": "organisasi", "present": false, "strength": null, "evidence_quote": "", "rationale": "Tidak ada jejak penataan informasi pada teks contoh." },
+          { "indicator": "evaluasi", "present": false, "strength": null, "evidence_quote": "", "rationale": "Tidak ada jejak pemantauan diri pada teks contoh." }
+        ]
+      },
+      {
+        "analisis_mhs": "Penjelasan ketergantungan transitif ini sebenarnya mirip dengan masalah yang kami temui di praktikum basis data semester lalu waktu tabel karyawan menyimpan nama departemen. Waktu itu kami tidak tahu namanya, ternyata itu kasus 3NF.",
+        "findings": [
+          { "indicator": "orientasi", "present": false, "strength": null, "evidence_quote": "", "rationale": "Tidak ada jejak perencanaan awal pada teks contoh." },
+          { "indicator": "elaborasi", "present": true, "strength": "sedang", "evidence_quote": "mirip dengan masalah yang kami temui di praktikum basis data semester lalu", "rationale": "Mahasiswa menghubungkan materi baru dengan pengalaman dan pengetahuan sebelumnya." },
+          { "indicator": "organisasi", "present": false, "strength": null, "evidence_quote": "", "rationale": "Tidak ada jejak penataan informasi pada teks contoh." },
+          { "indicator": "evaluasi", "present": false, "strength": null, "evidence_quote": "", "rationale": "Tidak ada jejak pemantauan diri pada teks contoh." }
+        ]
+      },
+      {
+        "analisis_mhs": "Supaya tidak tercampur, saya pisahkan jadi dua kelompok: mana yang masalah struktur kunci (1NF, 2NF) dan mana yang masalah relasi antar atribut (3NF, BCNF). Saya buat tabel dua kolom untuk memetakan keduanya sebelum lanjut menilai.",
+        "findings": [
+          { "indicator": "orientasi", "present": false, "strength": null, "evidence_quote": "", "rationale": "Tidak ada jejak perencanaan awal pada teks contoh." },
+          { "indicator": "elaborasi", "present": false, "strength": null, "evidence_quote": "", "rationale": "Tidak ada jejak penghubungan dengan pengetahuan sebelumnya pada teks contoh." },
+          { "indicator": "organisasi", "present": true, "strength": "kuat", "evidence_quote": "saya pisahkan jadi dua kelompok", "rationale": "Mahasiswa menata informasi ke dalam struktur buatannya sendiri untuk mengelola beban kognitif." },
+          { "indicator": "evaluasi", "present": false, "strength": null, "evidence_quote": "", "rationale": "Tidak ada jejak pemantauan diri pada teks contoh." }
+        ]
+      },
+      {
+        "analisis_mhs": "Awalnya saya pikir sudah paham, tapi waktu mencoba menjelaskan ulang ke teman saya tersendat di bagian ketergantungan parsial. Berarti pemahaman saya belum solid, jadi saya kembali baca contoh kasusnya sebelum menulis bagian ini.",
+        "findings": [
+          { "indicator": "orientasi", "present": false, "strength": null, "evidence_quote": "", "rationale": "Tidak ada jejak perencanaan awal pada teks contoh." },
+          { "indicator": "elaborasi", "present": false, "strength": null, "evidence_quote": "", "rationale": "Tidak ada jejak penghubungan dengan pengetahuan sebelumnya pada teks contoh." },
+          { "indicator": "organisasi", "present": false, "strength": null, "evidence_quote": "", "rationale": "Tidak ada jejak penataan informasi pada teks contoh." },
+          { "indicator": "evaluasi", "present": true, "strength": "kuat", "evidence_quote": "Berarti pemahaman saya belum solid, jadi saya kembali baca contoh kasusnya", "rationale": "Mahasiswa memantau pemahamannya sendiri, mendeteksi kekurangan, dan menyesuaikan strategi. Monitoring dan kontrol." }
+        ]
+      },
+      {
+        "analisis_mhs": "Penjelasan AI tentang 3NF kurang tepat karena tidak mempertimbangkan BCNF. Seharusnya disebutkan bahwa 3NF belum menjamin bebas anomali pada kasus kunci kandidat ganda.",
+        "findings": [
+          { "indicator": "orientasi", "present": false, "strength": null, "evidence_quote": "", "rationale": "Tidak ada jejak perencanaan awal." },
+          { "indicator": "elaborasi", "present": false, "strength": null, "evidence_quote": "", "rationale": "Tidak ada jejak penghubungan dengan pengetahuan sebelumnya." },
+          { "indicator": "organisasi", "present": false, "strength": null, "evidence_quote": "", "rationale": "Tidak ada jejak penataan informasi." },
+          { "indicator": "evaluasi", "present": false, "strength": null, "evidence_quote": "", "rationale": "Tidak ada jejak pemantauan diri." }
+        ],
+        "rationale": "Kritik isi yang tajam, tetapi tidak ada jejak proses belajar mahasiswa sendiri — tidak ada perencanaan, penghubungan, penataan, maupun pemantauan diri. Kualitas analisis tinggi tidak otomatis berarti ada proses metakognitif yang terekam.",
+        "catatan_sumber": "CONTOH NEGATIF (nol kode) — kritik tajam tanpa jejak SRL tetap nol kode"
+      }
+    ]
+  }
+}

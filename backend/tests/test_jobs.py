@@ -33,10 +33,13 @@ OK_COGNITIVE = CognitiveResult(
 
 ANALYSIS = "Menurut analisis saya, hasil tersebut belum membahas risiko residual, jadi perlu diuji ulang."
 AI_OUTPUT = "COSO adalah kerangka manajemen risiko yang menekankan pengendalian internal."
-CALIBRATION = [{"analysis": ANALYSIS, "level": "Memahami"}]
-# The levels the interim seed writes, quoted from the seed's contract; the tests only need the
+CALIBRATION = {
+    "cognitive": {"instructions": "uji", "examples": [{"level": "C4", "evidence_quote": ANALYSIS}]},
+    "metacognitive": {"instructions": "uji", "examples": [{"analisis_mhs": ANALYSIS}]},
+}
+# The codes the interim seed writes, quoted from the seed's contract; the tests only need the
 # rubric dict to be non-empty, and nothing here may become rubric content for the thesis.
-LEVELS = ["Mengingat", "Memahami", "Menerapkan", "Menganalisis", "Mengevaluasi", "Mencipta"]
+LEVELS = ["C1", "C2", "C3", "C4", "C5", "C6"]
 INDICATORS = ["elaborasi", "organisasi", "orientasi", "evaluasi"]
 
 
@@ -290,7 +293,7 @@ def test_process_run_resumes_jobs_left_running_by_a_crash(monkeypatch):
     assert [job["status"] for job in job_rows(lecturer["owner"], lecturer["run"])] == ["done", "queued"]
 
 
-def test_a_run_without_calibration_reaches_the_graph_as_an_empty_list(monkeypatch):
+def test_a_run_without_calibration_reaches_the_graph_as_an_empty_block(monkeypatch):
     """Passed through empty on purpose: the builders refuse an uncalibrated agent (PRD §6), so
     their refusal is the failure the job records rather than an example this loader invents."""
     lecturer = make_lecturer(1, calibration=False)
@@ -305,7 +308,7 @@ def test_a_run_without_calibration_reaches_the_graph_as_an_empty_list(monkeypatc
 
     worker.process_run(lecturer["owner"], lecturer["run"])
 
-    assert [state["prompts"] for state in seen] == [{"calibration": []}]
+    assert [state["prompts"] for state in seen] == [{"calibration": {}}]
 
 
 def test_a_run_without_a_rubric_fails_its_jobs_without_calling_the_graph(monkeypatch):

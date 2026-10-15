@@ -36,18 +36,31 @@ from psycopg.types.json import Jsonb
 from app.agents.prompts import TEMPLATES
 from app.config import get_settings
 
-LEVELS = ["Mengingat", "Memahami", "Menerapkan", "Menganalisis", "Mengevaluasi", "Mencipta"]
+#: The six Bloom levels by code. Atthar's calibration (2026-10-15) states the scale as "C1 Remember …
+#: C6 Create", and the agents return those codes, so the codes are what the rubric stores; the names
+#: travel in `descriptors.levels`.
+LEVELS = ["C1", "C2", "C3", "C4", "C5", "C6"]
+LEVEL_NAMES = {
+    "C1": "Remember",
+    "C2": "Understand",
+    "C3": "Apply",
+    "C4": "Analyze",
+    "C5": "Evaluate",
+    "C6": "Create",
+}
 INDICATORS = ["elaborasi", "organisasi", "orientasi", "evaluasi"]
 DIMENSIONS = ["cognitive", "metacognitive"]
 
 RUBRIC_NOTE = (
-    "Rubrik interim: empat kode SRL G1 dipakai sebagai placeholder untuk dimensi metakognitif dan "
-    "enam nama level Bloom untuk dimensi kognitif. Pedoman penilaian dari pembimbing menggantikan "
-    "seluruh isi ini (PRD §13). Tidak ada deskriptor maupun ambang batas yang ditulis di sini."
+    "Rubrik interim: empat kode SRL G1 sebagai placeholder untuk dimensi metakognitif, dan enam kode "
+    "level Bloom revisi (Anderson & Krathwohl, 2001) beserta namanya untuk dimensi kognitif. Pedoman "
+    "penilaian dari pembimbing menggantikan seluruh isi ini (PRD §13). Tidak ada ambang batas yang "
+    "ditulis di sini."
 )
 CALIBRATION_NOTE = (
-    "Contoh kalibrasi adalah kontribusi Atthar (PRD §14). Selama `examples` kosong, agen kognitif "
-    "dan metakognitif menolak berjalan (MissingCalibration, PRD §6), bukan berjalan tanpa kalibrasi."
+    "Blok kalibrasi per agen adalah kontribusi Atthar (PRD §14), termasuk contoh sintetis untuk level "
+    "yang tidak punya contoh nyata di arsip. Selama blok seorang agen kosong, agen itu menolak "
+    "berjalan (MissingCalibration, PRD §6), bukan berjalan tanpa kalibrasi."
 )
 
 
@@ -70,7 +83,7 @@ def rubric_content() -> dict[str, Any]:
         "levels": LEVELS,
         "indicators": INDICATORS,
         "descriptors": {
-            "levels": {},
+            "levels": LEVEL_NAMES,
             "indicators": {},
             "interim": True,
             "pending_supervisors": True,
@@ -79,24 +92,21 @@ def rubric_content() -> dict[str, Any]:
     }
 
 
-def prompt_content(calibration: list[dict[str, Any]]) -> dict[str, str]:
+def prompt_content(calibration: dict[str, Any]) -> dict[str, str]:
     """Agent name -> the PromptVersion.template text, including the `calibration` row.
 
     Each agent's template is its two turns, system and user, as JSON; the calibration row is the
-    example list plus its pending flags, which is the shape the graph reads back (PRD §6 stores the
-    examples as versioned PromptVersion rows).
+    per-agent blocks plus their provenance flags, which is the shape the graph reads back (PRD §6
+    stores the calibration as a versioned PromptVersion row). What the file says wins, so the source
+    and the interim flags travel with the content they describe.
     """
     stored = {
         name: json.dumps({"system": system, "user": user}, ensure_ascii=False, indent=2)
         for name, (system, user) in TEMPLATES.items()
     }
-    calibration_row = {
-        "examples": calibration,
-        "interim": True,
-        "pending_atthar": True,
-        "note": CALIBRATION_NOTE,
-    }
-    stored["calibration"] = json.dumps(calibration_row, ensure_ascii=False, indent=2)
+    stored["calibration"] = json.dumps(
+        {**calibration, "note": CALIBRATION_NOTE}, ensure_ascii=False, indent=2
+    )
     return stored
 
 
@@ -163,7 +173,7 @@ def _seed_prompt(
     return f"{agent_name} v{version} inserted"
 
 
-def seed(database_url: str, email: str | None, calibration: list[dict[str, Any]]) -> list[str]:
+def seed(database_url: str, email: str | None, calibration: dict[str, Any]) -> list[str]:
     """Write whichever versions are missing, and report one line per row touched."""
     with psycopg.connect(database_url, autocommit=True, row_factory=dict_row) as conn:
         owner_id = _owner(conn, email)
@@ -176,10 +186,19 @@ def seed(database_url: str, email: str | None, calibration: list[dict[str, Any]]
     return report
 
 
-def _calibration_from(path: str) -> list[dict[str, Any]]:
+def _calibration_from(path: str) -> dict[str, Any]:
+    """The calibration file: one block per analysis agent, each with instructions and examples.
+
+    Both agents are checked here rather than at the first run, because a file missing the
+    metacognitive block would seed cleanly and only fail once a job reached that agent.
+    """
     parsed = json.loads(pathlib.Path(path).read_text(encoding="utf-8"))
-    if not isinstance(parsed, list) or not all(isinstance(item, dict) for item in parsed):
-        raise SystemExit(f"{path} must hold a JSON list of example objects.")
+    if not isinstance(parsed, dict):
+        raise SystemExit(f"{path} must hold a JSON object keyed by agent name, not a list.")
+    for agent in ("cognitive", "metacognitive"):
+        block = parsed.get(agent)
+        if not isinstance(block, dict) or not block.get("examples"):
+            raise SystemExit(f"{path}: `{agent}` needs an object with a non-empty `examples` list.")
     return parsed
 
 
@@ -188,13 +207,13 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--email", help="Owner of the seeded rows; defaults to the first admin.")
     parser.add_argument(
         "--calibration",
-        help="JSON file holding the calibration example list (PRD §14). Omit to seed it pending.",
+        default=str(pathlib.Path(__file__).with_name("calibration.json")),
+        help="JSON file with the per-agent calibration blocks (PRD §14).",
     )
     args = parser.parse_args(argv)
 
-    calibration = _calibration_from(args.calibration) if args.calibration else []
-    if not calibration:
-        print("calibration: empty, flagged pending Atthar (PRD §14); agents refuse to run.")
+    calibration = _calibration_from(args.calibration)
+    print(f"calibration: {args.calibration}")
     for line in seed(get_settings().database_url, args.email, calibration):
         print(line)
 

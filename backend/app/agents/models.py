@@ -17,7 +17,10 @@ from typing import Annotated, Literal, TypedDict
 
 from pydantic import BaseModel, Field
 
-Strength = Literal["low", "medium", "high"]
+#: The rubric's own words for how strong a trace is (Atthar's calibration, PRD §14). Indonesian, like
+#: the rest of the rubric content: this value ends up in `system_scores.level` for a metacognitive row
+#: and is read by a lecturer, so it is not translated into a second vocabulary.
+Strength = Literal["lemah", "sedang", "kuat"]
 
 
 class CognitiveResult(BaseModel):

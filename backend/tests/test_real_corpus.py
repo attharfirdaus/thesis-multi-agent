@@ -5,9 +5,8 @@ prove that ingest, segmentation, the graph, persistence and the evidence offsets
 PDFs the thesis actually scores, nor that an offset lands inside real Indonesian student text. That is
 what this file covers, and it runs in CI because `samples/` is committed.
 
-The provider is stubbed as everywhere else. Two things are deliberately not real: the calibration
-examples are a clearly-labelled fixture, which `app/agents/prompts.py` allows for pipeline verification
-only (the thesis calibration is Atthar's, PRD §14), and the stub answers with a slice of the
+The provider is stubbed as everywhere else. The calibration is the real one
+(`scripts/calibration.json`, Atthar's content, PRD §14), and the stub answers with a slice of the
 submission's own stored text, so the offsets still have to be computed by the real code under test.
 """
 
@@ -34,13 +33,7 @@ SAMPLES = sorted(
 )
 EMAIL = "real-corpus@example.ac.id"
 PASSWORD = "kata-sandi-panjang-2026"
-FIXTURE_CALIBRATION = [
-    {
-        "catatan": "FIXTURE VERIFIKASI PIPELINE — bukan kalibrasi tesis",
-        "teks_mahasiswa": "Menurut saya COSO dan ISO 31000 berbeda fokusnya.",
-        "level": "Menganalisis",
-    }
-]
+CALIBRATION_PATH = pathlib.Path(__file__).resolve().parents[1] / "scripts" / "calibration.json"
 
 
 class QuoteStub:
@@ -55,7 +48,7 @@ class QuoteStub:
         quote = self.quotes[self.calls % len(self.quotes)]
         payload = {
             CognitiveResult: CognitiveResult(
-                level="Menganalisis",
+                level="C4",
                 evidence_quote=quote,
                 rationale="Mahasiswa membandingkan dua kerangka kerja pada bagian ini.",
             ),
@@ -64,14 +57,14 @@ class QuoteStub:
                     IndicatorFinding(
                         indicator="elaborasi",
                         present=True,
-                        strength="high",
+                        strength="kuat",
                         evidence_quote=quote,
                         rationale="Membandingkan dua kerangka dan menjelaskan fokus masing-masing.",
                     ),
                     IndicatorFinding(
                         indicator="evaluasi",
                         present=True,
-                        strength="medium",
+                        strength="sedang",
                         evidence_quote=self.quotes[0],
                         rationale="Menilai keterbatasan tiap kerangka.",
                     ),
@@ -112,8 +105,12 @@ def test_real_submissions_score_with_offsets_in_their_own_text(client, monkeypat
     user = uuid.UUID(client.get("/auth/me").json()["user"]["id"])
     headers = {"X-CSRF-Token": client.cookies.get("ta_csrf")}
 
-    # The real seeder, so the rubric and prompt rows this run snapshots are the ones the app ships.
-    seed_rubric(os.environ["DATABASE_URL"], EMAIL, FIXTURE_CALIBRATION)
+    # The real seeder with the shipped calibration, so the run snapshots the content that ships.
+    seed_rubric(
+        os.environ["DATABASE_URL"],
+        EMAIL,
+        json.loads(CALIBRATION_PATH.read_text(encoding="utf-8")),
+    )
 
     with db.tenant_tx(user) as conn:
         rubric_id = conn.execute("select id from rubric_versions limit 1").fetchone()[0]

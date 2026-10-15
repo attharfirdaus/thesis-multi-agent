@@ -159,36 +159,49 @@ def _rubric_slots(rubric: dict[str, Any]) -> dict[str, str]:
     }
 
 
-def _examples(calibration: list[dict[str, Any]]) -> str:
-    return json.dumps(calibration, ensure_ascii=False, indent=2)
+def _calibration_block(calibration: dict[str, Any], agent_name: str) -> str:
+    """One agent's calibration block: its instructions, then its examples as JSON.
 
-
-def _require_calibration(calibration: list[dict[str, Any]], agent_name: str) -> None:
-    if not calibration:
+    The block is per agent because the two analysis agents are calibrated differently — Bloom for the
+    cognitive agent, SRL codes for the metacognitive one — and each must see only its own examples.
+    `catatan_sumber` is provenance for whoever reads the file, not part of the demonstration, so it is
+    dropped before the block is rendered. An empty block raises: the run is refused, not degraded.
+    """
+    block = calibration.get(agent_name) or {}
+    examples = [
+        {key: value for key, value in example.items() if key != "catatan_sumber"}
+        for example in block.get("examples", [])
+    ]
+    if not examples:
         raise MissingCalibration(
             f"No calibration examples for the {agent_name} agent. They are mandatory (PRD §6) and "
-            "are seeded from Atthar's set (PRD §14); an uncalibrated run is refused rather than run."
+            "are Atthar's content (PRD §14); an uncalibrated run is refused rather than run."
         )
+    instructions = block.get("instructions", "")
+    rendered = json.dumps(examples, ensure_ascii=False, indent=2)
+    return f"{instructions}\n\nContoh terkalibrasi:\n{rendered}"
 
 
 def cognitive_prompt(
-    rubric: dict[str, Any], calibration: list[dict[str, Any]], analysis_text: str
+    rubric: dict[str, Any], calibration: dict[str, Any], analysis_text: str
 ) -> tuple[str, str]:
     """Bloom level of the student's own analysis. `calibration` is mandatory (PRD §6)."""
-    _require_calibration(calibration, "cognitive")
     user = _COGNITIVE_USER.substitute(
-        **_rubric_slots(rubric), calibration=_examples(calibration), analysis_text=analysis_text
+        **_rubric_slots(rubric),
+        calibration=_calibration_block(calibration, "cognitive"),
+        analysis_text=analysis_text,
     )
     return TEMPLATES["cognitive"][0], user
 
 
 def metacognitive_prompt(
-    rubric: dict[str, Any], calibration: list[dict[str, Any]], analysis_text: str
+    rubric: dict[str, Any], calibration: dict[str, Any], analysis_text: str
 ) -> tuple[str, str]:
     """Presence and strength of each SRL indicator in the student's analysis; calibration mandatory."""
-    _require_calibration(calibration, "metacognitive")
     user = _METACOGNITIVE_USER.substitute(
-        **_rubric_slots(rubric), calibration=_examples(calibration), analysis_text=analysis_text
+        **_rubric_slots(rubric),
+        calibration=_calibration_block(calibration, "metacognitive"),
+        analysis_text=analysis_text,
     )
     return TEMPLATES["metacognitive"][0], user
 

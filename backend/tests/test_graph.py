@@ -76,7 +76,7 @@ def metacognitive_result(quote: str = METACOGNITIVE_QUOTE) -> MetacognitiveResul
             IndicatorFinding(
                 indicator="evaluasi",
                 present=True,
-                strength="high",
+                strength="kuat",
                 evidence_quote=quote,
                 rationale="Mahasiswa memeriksa ulang data yang dipakai model.",
             )
@@ -97,7 +97,18 @@ def make_state(**overrides: object) -> dict:
         "run_id": "run-1",
         "submission_id": "submission-1",
         "rubric": {"version": "v1", "levels": ["C4"], "indicators": ["evaluasi"]},
-        "prompts": {"calibration": [{"example": "kalibrasi"}]},
+        "prompts": {
+            "calibration": {
+                "cognitive": {
+                    "instructions": "kalibrasi uji",
+                    "examples": [{"level": "C4", "evidence_quote": "kalibrasi"}],
+                },
+                "metacognitive": {
+                    "instructions": "kalibrasi uji",
+                    "examples": [{"analisis_mhs": "kalibrasi"}],
+                },
+            }
+        },
         "student_analysis_text": ANALYSIS,
         "ai_output_text": "Model menjawab dengan ringkasan singkat.",
     }

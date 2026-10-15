@@ -36,7 +36,7 @@ ANALYSIS = (
     "Evaluasi saya, keduanya saling melengkapi dan tidak bisa dipakai sendiri-sendiri."
 )
 
-LEVELS = ["Mengingat", "Memahami", "Menerapkan", "Menganalisis", "Mengevaluasi", "Mencipta"]
+LEVELS = ["C1", "C2", "C3", "C4", "C5", "C6"]
 INDICATORS = ["elaborasi", "organisasi", "orientasi", "evaluasi"]
 
 
@@ -50,7 +50,7 @@ class StubClient:
         self.calls.append(schema)
         payload = {
             CognitiveResult: CognitiveResult(
-                level="Menganalisis",
+                level="C4",
                 evidence_quote=QUOTE_COGNITIVE,
                 rationale="Mahasiswa menilai dua kerangka kerja dan membandingkan fokusnya.",
             ),
@@ -59,14 +59,14 @@ class StubClient:
                     IndicatorFinding(
                         indicator="elaborasi",
                         present=True,
-                        strength="high",
+                        strength="kuat",
                         evidence_quote=QUOTE_METACOGNITIVE,
                         rationale="Memperluas dengan membandingkan dua kerangka kerja.",
                     ),
                     IndicatorFinding(
                         indicator="evaluasi",
                         present=True,
-                        strength="medium",
+                        strength="sedang",
                         evidence_quote=QUOTE_COGNITIVE,
                         rationale="Memberi penilaian tentang keterbatasan masing-masing.",
                     ),
@@ -136,12 +136,27 @@ def seeded(client, monkeypatch):
                 "values (%s, %s, 1, %s)",
                 (user, agent, "template placeholder — the real templates live in app/agents/prompts.py"),
             )
-        # Calibration is stored exactly as scripts/seed_rubric.py writes it: an object carrying the
-        # examples plus the flags that mark it interim.
+        # Shaped like the seeded row: one calibration block per analysis agent, plus the flags that
+        # mark whose content it is (PRD §14).
         conn.execute(
             "insert into prompt_versions "
             "(owner_id, agent_name, version, template) values (%s, 'calibration', 1, %s)",
-            (user, json.dumps({"examples": [{"text": "contoh", "level": "Memahami"}], "interim": True})),
+            (
+                user,
+                json.dumps(
+                    {
+                        "cognitive": {
+                            "instructions": "kalibrasi uji",
+                            "examples": [{"level": "C4", "evidence_quote": "contoh"}],
+                        },
+                        "metacognitive": {
+                            "instructions": "kalibrasi uji",
+                            "examples": [{"analisis_mhs": "contoh"}],
+                        },
+                        "interim": True,
+                    }
+                ),
+            ),
         )
         assignment = conn.execute(
             "insert into assignments (owner_id, title, course, rubric_version_id) "
@@ -217,12 +232,12 @@ def test_one_batch_evaluates_end_to_end_with_evidence(seeded):
     assert submission["feedback_text"], "FR-19 feedback must be stored"
 
     cognitive = next(s for s in submission["scores"] if s["dimension"] == "cognitive")
-    assert cognitive["level"] == "Menganalisis"
+    assert cognitive["level"] == "C4"
     assert cognitive["rationale"]
 
     indicators = {s["indicator"]: s for s in submission["scores"] if s["dimension"] == "metacognitive"}
     assert set(indicators) == set(INDICATORS)
-    assert indicators["elaborasi"]["level"] == "high"
+    assert indicators["elaborasi"]["level"] == "kuat"
     assert indicators["organisasi"]["level"] == "absent"
 
     # The decisive check: offsets must slice the quote out of the *stored* text, not out of something

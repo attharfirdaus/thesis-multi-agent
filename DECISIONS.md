@@ -5,7 +5,41 @@ Every provider/model/library fact cited in this project carries a source URL and
 
 ## Open decisions
 
-No model or provider decision remains open. The hosting decisions (O-2, O-3, O-5) were re-taken twice — on 2026-10-07 (VM dropped) and again on 2026-10-14 (Cloud Run dropped for a card-free host) — see the newest entries; the older ones are kept as the record of what was chosen and why it changed. What is still open lives in PRD section 14 — the supervisors' metacognitive rubric, the few-shot calibration examples for Bloom levels with no real data, institutional ethics clearance, the validation-subset size, the SUS instrument, and the feedback-text format.
+No model or provider decision remains open. The hosting decisions (O-2, O-3, O-5) were re-taken twice — on 2026-10-07 (VM dropped) and again on 2026-10-14 (Cloud Run dropped for a card-free host) — see the newest entries; the older ones are kept as the record of what was chosen and why it changed. What is still open lives in PRD section 14 — the supervisors' metacognitive rubric, institutional ethics clearance, the validation-subset size, the SUS instrument, the feedback-text format, and how the two synthetic calibration examples are validated. The few-shot calibration itself is settled: Atthar supplied it on 2026-10-15.
+
+## 2026-10-15 (later) — Calibration supplied by Atthar; the rubric now speaks his vocabulary
+
+Atthar answered PRD §14 with the few-shot calibration: six Bloom examples for the cognitive agent (C1–C4
+from the archive, **C5 and C6 marked SYNTHETIC** because no real example exists at those levels) and five
+SRL examples for the metacognitive agent (one per code plus a zero-code case). The content is his; the
+coding agent did not author or reword it.
+
+- **Stored as data, one block per agent, in `backend/scripts/calibration.json`** and seeded into
+  `PromptVersion` (`agent_name = 'calibration'`, v1) by `scripts/seed_rubric.py --calibration`, which now
+  defaults to that file. Options: one shared example list (what the schema had) or per-agent blocks. Two
+  agents with different rubrics cannot share one list — each would be prompted with the other's examples —
+  so the row is keyed by agent, and a file missing either block is refused when it is read, not at the
+  first job. Decided by the agent; the content by Atthar.
+- **Level vocabulary is now the six Bloom codes (`C1`…`C6`) with their names in
+  `RubricVersion.descriptors.levels`.** Options: keep the Indonesian Bloom names the interim seed wrote,
+  or adopt the codes Atthar's own examples return. The rubric stores what the agents return, so the codes
+  win; the names travel as descriptors. No threshold is seeded — that stays the supervisors' guideline's
+  job (PRD §13). Seeded to his Neon database on 2026-10-15: rubric v1, prompts v1, calibration v1.
+- **`Strength` is `lemah | sedang | kuat`, not `low | medium | high`.** His calibration writes those
+  words and they land in `system_scores.level` where a lecturer reads them, so translating them would
+  have created a second vocabulary for the same rubric value.
+- **JSON field names inside the examples were aligned to the agent schemas** (`evidence_quote`,
+  `present`, `indicator` instead of `evidence`, `presence`, `kode`), and the negative example — which he
+  wrote as `{"semua_kode": false}` — is expressed as the schema's own shape, four findings with
+  `present: false`. Reason: the examples are what the model imitates, and an example whose keys differ
+  from the schema it is validated against teaches the wrong shape. **This is the one place his text was
+  altered; the assessment content, rationales and principles are verbatim.** Flagged for his review.
+- **Provenance notes do not reach the prompt:** `catatan_sumber` (used to mark the two synthetic examples
+  and the zero-code case) is stripped when the block is rendered, so the reader-facing annotation never
+  becomes model input. Verified: no `catatan_sumber`, no `SYNTHETIC`, and no cross-agent leakage in
+  either rendered prompt.
+- **Still open from the same PRD §14 item:** how the two synthetic examples (C5, C6) are validated so
+  they do not bias the agent toward one phrasing. Marking them is not the same as validating them.
 
 ## 2026-10-15 — Phase 4 built: the agent pipeline, its queue and its evidence contract
 
