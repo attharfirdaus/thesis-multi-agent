@@ -32,7 +32,7 @@ export function StatusBadge({
   );
 }
 
-export type StatusMeta = { label: string; tone: Tone };
+type StatusMeta = { label: string; tone: Tone };
 
 const RUN_STATUS: Record<string, StatusMeta> = {
   queued: { label: "Menunggu", tone: "neutral" },

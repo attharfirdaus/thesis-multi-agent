@@ -1,7 +1,7 @@
 import type { Evidence, Score } from "@/lib/api";
 
 /** One slice of the student's text, with the scores whose evidence covers it. */
-export type Segment = { start: number; end: number; text: string; scoreIds: string[] };
+type Segment = { start: number; end: number; text: string; scoreIds: string[] };
 
 /**
  * The document a segmentation offset indexes. The API joins the two segments with a newline, and the
