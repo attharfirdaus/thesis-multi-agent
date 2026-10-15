@@ -3,7 +3,10 @@
 Every other test uses a synthetic docx: faster, deterministic, and enough for the logic. It cannot
 prove that ingest, segmentation, the graph, persistence and the evidence offsets survive the Word-table
 PDFs the thesis actually scores, nor that an offset lands inside real Indonesian student text. That is
-what this file covers, and it runs in CI because `samples/` is committed.
+what this file covers. The PDFs are the owner's own archived submissions and are deliberately gitignored
+(`.gitignore` lists `samples/`), so this file runs where they exist — the owner's machine — and skips in
+CI, where the skip reason says exactly that. A skip is not a pass, and pretending otherwise would be the
+kind of claim this project keeps out of its records.
 
 The provider is stubbed as everywhere else. The calibration is the real one
 (`scripts/calibration.json`, Atthar's content, PRD §14), and the stub answers with a slice of the

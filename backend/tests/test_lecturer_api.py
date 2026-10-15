@@ -299,7 +299,15 @@ def test_export_csv_and_xlsx(seeded):
     assert cognitive_row[14] == run_id
     assert cognitive_row[15] == "multi_agent"
     assert cognitive_row[19] == "1"
-    assert cognitive_row[16] and cognitive_row[17] is not None and cognitive_row[18] is not None
+    # The metadata columns are the *run's* snapshot, not the current environment: read them back from
+    # the run row, so the assertion still says something true where no provider is configured (CI) and
+    # actually checks the stronger claim — that the export reports what the run froze, not what the
+    # process happens to be configured with now.
+    with db.tenant_tx(seeded["user"]) as conn:
+        config = conn.execute("select model_config from runs where id = %s", (run_id,)).fetchone()[0]
+    assert cognitive_row[16] == (config.get("model") or "")
+    assert cognitive_row[17] == ("" if config.get("temperature") is None else str(config["temperature"]))
+    assert cognitive_row[18] == ("" if config.get("seed") is None else str(config["seed"]))
 
     reviewed = [
         row for row in rows[1:] if row[9] not in ("", None)
