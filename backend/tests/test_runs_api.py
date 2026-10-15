@@ -253,6 +253,15 @@ def test_one_batch_evaluates_end_to_end_with_evidence(seeded):
     metacog_span = indicators["elaborasi"]["evidence"][0]
     assert analysis[metacog_span["start_offset"] : metacog_span["end_offset"]] == metacog_span["quote"]
 
+    # PRD §10 keeps a latency per trace. It was null in every row until the state carried the client's
+    # own measurement, which is the app's evidence for the PRD §11 performance target.
+    with db.tenant_tx(seeded["user"]) as conn:
+        traces = conn.execute(
+            "select agent_name, latency_ms from agent_traces where run_id = %s", (run_id,)
+        ).fetchall()
+    assert {name for name, _ in traces} == {"cognitive", "metacognitive", "synthesis"}, traces
+    assert {latency for _, latency in traces} == {7}, traces
+
 
 def test_run_status_reports_job_counts(seeded):
     client, csrf = seeded["client"], seeded["csrf"]

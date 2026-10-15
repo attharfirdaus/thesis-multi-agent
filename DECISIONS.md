@@ -7,6 +7,53 @@ Every provider/model/library fact cited in this project carries a source URL and
 
 No model or provider decision remains open. The hosting decisions (O-2, O-3, O-5) were re-taken twice — on 2026-10-07 (VM dropped) and again on 2026-10-14 (Cloud Run dropped for a card-free host) — see the newest entries; the older ones are kept as the record of what was chosen and why it changed. What is still open lives in PRD section 14 — the supervisors' metacognitive rubric, institutional ethics clearance, the validation-subset size, the SUS instrument, the feedback-text format, and how the two synthetic calibration examples are validated. The few-shot calibration itself is settled: Atthar supplied it on 2026-10-15.
 
+## 2026-10-15 (evening) — Phase 4 gate run against the real provider: the four archived submissions
+
+First run with no stub. `@cf/google/gemma-4-26b-a4b-it`, `LLM_TEMPERATURE=0`, `LLM_SEED` unset, the four
+archived PDFs from `samples/`, driven over HTTP through the app's own upload → run → process → results
+path against a throwaway database. Credentials were supplied by Atthar and verified before the run.
+
+**Throughput and reliability.** 4/4 imported, 4/4 jobs `done`, run `done`, `needs_review=1`, 342
+LangGraph checkpoint rows. 12 provider calls: **11 usable on the first attempt** (JSON mode held on the
+first answer), 1 retried once and then succeeded, and **1 failed after 3 attempts with a ReadTimeout** —
+that submission's cognitive dimension was flagged `cognitive_agent_failed`, its metacognitive findings
+were still stored, and the batch finished normally. That is PRD §6's "a failed submission never fails the
+batch" exercised for real rather than asserted.
+
+**Latency per call: min 19.98 s, max 85.77 s, mean 44.47 s**; the batch took 807 s (13.5 min) for four
+submissions at prompt sizes of 10.0k–25.9k characters. This is the number the PRD §11 performance target
+gets set from, and it is the reason the trace fix below matters.
+
+**Evidence check.** Three quotes were stored across the run, one per scored submission. All three were
+located, and **zero of three match the stored text character for character** — the difference is line
+breaks only, and the normalised comparison is equal in all three cases. The lesson is recorded because it
+is easy to misread: exact string equality is the wrong metric; `normalise()` equality is the right one,
+and a paraphrase would fail both.
+
+**Substantive finding — the metacognitive agent reported `present: false` for all four codes on all four
+submissions (16/16)**, each with its own Indonesian rationale ("Tidak ada jejak perencanaan atau
+penetapan tujuan belajar..."). Two readings, and the app cannot choose between them: either these four
+archived analyses genuinely carry no self-regulation traces — they are framework comparisons written to
+answer a prompt — or the calibration biases the agent toward `absent`, since the zero-code example is one
+of five and the instruction warns that affective expression is not a code. **Raised to Atthar as the gate's
+main substantive question; not tuned by the agent**, because the calibration and the rubric are his
+content (PRD §14) and quietly rewriting them to produce more `true`s would be fitting the instrument to
+the result.
+
+**Defect found by this run and fixed the same day: `agent_traces.latency_ms` was null in every row** (12
+of 12). The client measures it, and the previous code deliberately dropped it, arguing that a state key
+carrying only a metric was not worth it — but PRD §10 lists the column and PRD §11 asks for per-step
+observability, and this run was paying 20–86 s per call while throwing the measurement away. Fixed with a
+`latencies` channel in `GraphState` (a merge reducer, because the two analysis agents write it in
+parallel), filled by each node from its own `Completion` and written by `persist`. A failed synthesis
+retry keeps the first call's latency, since that call's result is the one stored. Tests at both levels:
+the graph state carries all three agents' values, and the trace rows carry them after a full HTTP batch.
+
+**Still unmeasured, stated plainly:** the provider's `seed` parameter was never exercised (`LLM_SEED`
+unset, so no `seed` in the request body), so PRD §11's reproducibility claim has no measurement behind it
+yet; and run-to-run variance (3–5 repeats per dimension) is still not implemented, so nothing here says
+how stable these scores are across calls.
+
 ## 2026-10-15 (later) — Calibration supplied by Atthar; the rubric now speaks his vocabulary
 
 Atthar answered PRD §14 with the few-shot calibration: six Bloom examples for the cognitive agent (C1–C4

@@ -147,6 +147,8 @@ def test_happy_path_scores_both_dimensions_and_locates_both_quotes(prompt_calls)
     result = evaluate_submission(make_state(), client)
 
     assert result["cognitive"].level == "C4"
+    # Each agent's own measurement, carried in the state so `persist` can write PRD §10's trace column.
+    assert result["latencies"] == {"cognitive": 1, "metacognitive": 1, "synthesis": 1}
     assert result["metacognitive"].findings[0].indicator == "evaluasi"
     assert result["synthesis"].feedback_text == synthesis_result().feedback_text
     assert result.get("evidence_failures", []) == []

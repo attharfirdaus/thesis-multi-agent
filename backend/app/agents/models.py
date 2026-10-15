@@ -80,6 +80,11 @@ def _merge_lists(left: list[str], right: list[str]) -> list[str]:
     return [*left, *right]
 
 
+def _merge_maps(left: dict[str, int], right: dict[str, int]) -> dict[str, int]:
+    """Reducer for `latencies`: the two analysis agents measure their own calls in parallel."""
+    return {**left, **right}
+
+
 class GraphState(TypedDict, total=False):
     """The LangGraph channel definition.
 
@@ -112,3 +117,7 @@ class GraphState(TypedDict, total=False):
     # Bookkeeping. Both parallel agents write these, hence the reducers.
     flags: Annotated[list[str], _merge_lists]
     errors: Annotated[list[str], _merge_lists]
+    # Wall-clock milliseconds per agent call, taken from the client's own measurement (PRD §10
+    # AgentTrace.latency_ms). Collected here because the client has no run or submission context, and
+    # a free provider's latency is what the performance target in PRD §11 is set from.
+    latencies: Annotated[dict[str, int], _merge_maps]

@@ -139,7 +139,10 @@ def _cognitive_node(client: ProviderClient | None) -> Callable[[GraphState], dic
             raise
         except Exception as exc:
             return {"cognitive": None, **_failure(COGNITIVE_FAILED, exc)}
-        return {"cognitive": _parsed(completion.parsed, CognitiveResult)}
+        return {
+            "cognitive": _parsed(completion.parsed, CognitiveResult),
+            "latencies": {"cognitive": completion.latency_ms},
+        }
 
     return node
 
@@ -159,15 +162,20 @@ def _metacognitive_node(client: ProviderClient | None) -> Callable[[GraphState],
             raise
         except Exception as exc:
             return {"metacognitive": None, **_failure(METACOGNITIVE_FAILED, exc)}
-        return {"metacognitive": _parsed(completion.parsed, MetacognitiveResult)}
+        return {
+            "metacognitive": _parsed(completion.parsed, MetacognitiveResult),
+            "latencies": {"metacognitive": completion.latency_ms},
+        }
 
     return node
 
 
 def _synthesise(
     state: GraphState, client: ProviderClient | None, retry_reason: str | None
-) -> SynthesisResult:
-    """One synthesis call. `retry_reason` is the evidence failure the retry has to answer (PRD §6)."""
+) -> tuple[SynthesisResult, int]:
+    """One synthesis call, with its wall-clock milliseconds (PRD §10).
+
+    `retry_reason` is the evidence failure the retry has to answer (PRD §6)."""
     cognitive = state.get("cognitive")
     metacognitive = state.get("metacognitive")
     system, user = prompts.synthesis_prompt(
@@ -181,14 +189,14 @@ def _synthesise(
         retry_reason=retry_reason,
     )
     completion = _client(client).complete_json(system=system, user=user, schema=SynthesisResult)
-    return _parsed(completion.parsed, SynthesisResult)
+    return _parsed(completion.parsed, SynthesisResult), completion.latency_ms
 
 
 def _synthesis_node(client: ProviderClient | None) -> Callable[[GraphState], dict[str, Any]]:
     def node(state: GraphState) -> dict[str, Any]:
         unverified = _unverified(state)
         try:
-            synthesis = _synthesise(state, client, retry_reason=None)
+            synthesis, latency = _synthesise(state, client, retry_reason=None)
         except Exception as exc:
             return {"synthesis": None, **_failure(SYNTHESIS_FAILED, exc)}
 
@@ -197,14 +205,20 @@ def _synthesis_node(client: ProviderClient | None) -> Callable[[GraphState], dic
         if unverified:
             flags.append(SYNTHESIS_RETRIED)
             try:
-                synthesis = _synthesise(state, client, retry_reason="; ".join(unverified))
+                # On a failed retry `synthesis` and `latency` keep the first call's values: that call's
+                # result is the one that gets stored, so its latency is the one the trace should show.
+                synthesis, latency = _synthesise(state, client, retry_reason="; ".join(unverified))
             except Exception as exc:
                 # The first synthesis is kept: a failed retry must not cost a usable explanation.
                 errors = [f"synthesis retry failed: {exc!r}"]
             # The retry can annotate the failure, it cannot make an agent's quote findable, so the
             # score is stored unverified and sent to the lecturer (PRD §6).
             flags.append(NEEDS_REVIEW)
-        update: dict[str, Any] = {"synthesis": synthesis, "flags": flags}
+        update: dict[str, Any] = {
+            "synthesis": synthesis,
+            "flags": flags,
+            "latencies": {"synthesis": latency},
+        }
         if errors:
             update["errors"] = errors
         return update

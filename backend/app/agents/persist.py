@@ -46,6 +46,7 @@ def persist_submission_result(
     cognitive = state.get("cognitive")
     metacognitive = state.get("metacognitive")
     synthesis = state.get("synthesis")
+    latencies = state.get("latencies", {})
     spans = list(state.get("evidence", []))
     by_source: dict[str, list] = {}
     for span in spans:
@@ -70,16 +71,18 @@ def persist_submission_result(
             ("synthesis", synthesis),
         ):
             cur.execute(
-                "insert into agent_traces (owner_id, run_id, submission_id, agent_name, output_json, error) "
-                "values (%s, %s, %s, %s, %s, %s)",
+                "insert into agent_traces "
+                "(owner_id, run_id, submission_id, agent_name, output_json, latency_ms, error) "
+                "values (%s, %s, %s, %s, %s, %s, %s)",
                 (
                     owner_id,
                     run_id,
                     submission_id,
                     agent,
                     None if payload is None else Jsonb(payload.model_dump(mode="json")),
-                    # latency_ms stays null on purpose: the client measures it, and threading it through
-                    # the graph state would add a state key that exists only to carry a metric.
+                    # The client's own measurement, carried in the state (PRD §10 AgentTrace): a free
+                    # provider's latency is the app's evidence for the performance target in PRD §11.
+                    latencies.get(agent),
                     None if payload is not None else "agent did not produce output",
                 ),
             )
