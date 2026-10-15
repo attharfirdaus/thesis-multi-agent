@@ -18,6 +18,8 @@ fi
 
 echo "Applying migrations…"
 (cd "$ROOT/backend" && uv run python -m scripts.migrate)
+# LangGraph owns its checkpoint tables; the worker writes to them on every node transition.
+(cd "$ROOT/backend" && uv run python -m scripts.setup_checkpointer)
 
 cleanup() { kill 0 2>/dev/null || true; }
 trap cleanup EXIT INT TERM

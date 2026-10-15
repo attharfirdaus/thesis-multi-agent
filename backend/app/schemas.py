@@ -67,3 +67,41 @@ class SegmentationPatch(BaseModel):
     """The lecturer's corrected boundary, as an offset into the combined document text."""
 
     analysis_start: int = Field(ge=0)
+
+
+class EvidenceOut(BaseModel):
+    quote: str
+    start_offset: int
+    end_offset: int
+
+
+class ScoreOut(BaseModel):
+    dimension: Literal["cognitive", "metacognitive"]
+    indicator: str | None = None
+    level: str
+    rationale: str | None = None
+    evidence: list[EvidenceOut] = Field(default_factory=list)
+
+
+class SubmissionResultOut(BaseModel):
+    submission_id: UUID
+    pseudonym: str
+    review_flags: list[str] = Field(default_factory=list)
+    scores: list[ScoreOut] = Field(default_factory=list)
+    feedback_text: str | None = None
+
+
+class RunResultsOut(BaseModel):
+    run_id: UUID
+    status: str
+    submissions: list[SubmissionResultOut] = Field(default_factory=list)
+
+
+class RunOut(BaseModel):
+    id: UUID
+    status: str
+    mode: str
+    jobs: dict[str, int] = Field(default_factory=dict)
+    needs_review: int = 0
+    processed: int = 0
+    failed: int = 0

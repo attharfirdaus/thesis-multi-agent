@@ -40,6 +40,9 @@ jobs:
       - name: Create roles and the test database
         working-directory: backend
         run: ./scripts/bootstrap_db.sh
+      - name: Create the LangGraph checkpoint tables
+        working-directory: backend
+        run: uv run python -m scripts.setup_checkpointer
       - name: Lint
         working-directory: backend
         run: uv run ruff check .

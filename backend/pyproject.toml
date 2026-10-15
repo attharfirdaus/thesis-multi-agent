@@ -18,9 +18,15 @@ dependencies = [
     "python-docx==1.2.0",
     # Multipart uploads (FR-03)
     "python-multipart==0.0.32",
+    # Agent pipeline (phase 4). Versions verified on PyPI 2026-10-14: langgraph 1.2.15 is two days
+    # old, while langgraph-checkpoint-postgres 3.2.0 was published the same day, so the boring-pin
+    # rule takes 3.1.2 (2026-08-07) instead. The pipeline uses the *sync* PostgresSaver: the known
+    # PgBouncer pipeline-mode failure is in the async saver, which this project does not use.
+    "langgraph==1.2.15",
+    "langgraph-checkpoint-postgres==3.1.2",
+    # The provider client speaks HTTP at runtime; httpx was previously only a test dependency.
+    "httpx==0.28.1",
 ]
-# Phase 4 adds the agent pipeline; pins already researched (2026-10-07):
-#   langgraph==1.2.14, langgraph-checkpoint-postgres==3.1.2
 # Phase 3 adds ingestion; verify versions when they are actually used.
 
 [dependency-groups]

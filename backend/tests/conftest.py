@@ -35,6 +35,7 @@ get_settings.cache_clear()
 
 from app.main import app  # noqa: E402  (import after settings are in place)
 from scripts.migrate import run as run_migrations  # noqa: E402
+from scripts.setup_checkpointer import setup as setup_checkpointer  # noqa: E402
 
 TENANT_TABLES = [
     "feedback", "lecturer_reviews", "evidence", "system_scores", "jobs", "agent_traces",
@@ -46,6 +47,10 @@ TENANT_TABLES = [
 @pytest.fixture(scope="session", autouse=True)
 def migrated():
     run_migrations(os.environ["MIGRATION_DATABASE_URL"])
+    # The graph checkpoints into its own tables, which LangGraph owns rather than our migrations
+    # (scripts/setup_checkpointer.py). The worker writes to them on every node transition, so a test
+    # database without them would fail in a confusing place.
+    setup_checkpointer(os.environ["MIGRATION_DATABASE_URL"])
 
 
 @pytest.fixture(autouse=True)

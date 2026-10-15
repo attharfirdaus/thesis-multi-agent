@@ -7,6 +7,43 @@ Every provider/model/library fact cited in this project carries a source URL and
 
 No model or provider decision remains open. The hosting decisions (O-2, O-3, O-5) were re-taken twice — on 2026-10-07 (VM dropped) and again on 2026-10-14 (Cloud Run dropped for a card-free host) — see the newest entries; the older ones are kept as the record of what was chosen and why it changed. What is still open lives in PRD section 14 — the supervisors' metacognitive rubric, the few-shot calibration examples for Bloom levels with no real data, institutional ethics clearance, the validation-subset size, the SUS instrument, and the feedback-text format.
 
+## 2026-10-15 — Phase 4 built: the agent pipeline, its queue and its evidence contract
+
+Format of the entries below: decision · options considered · who decided. The design narrative and the
+gate evidence are in `docs/phase-4/design.md`.
+
+- **The graph runs the two analysis agents in parallel, then synthesis, then the evidence check** — one
+  rule-based orchestrator, no routing LLM. Options: a sequential chain (simpler, half the latency
+  budget) or an LLM router (can adapt the agent set per submission). The PRD §6 topology is what was
+  specified and what the figure in the thesis documents; a router would add a second thing to evaluate
+  for no gate-relevant capability. Decided by the PRD, implementation choice by the agent.
+- **A quote that fails the evidence check twice is kept with a `submissions.review_flags` entry, not
+  discarded.** Options: drop the score, or keep it unflagged. Dropping loses data the thesis needs
+  (the failure rate is itself a result); keeping it unflagged would hide a fabrication from the
+  lecturer. `review_flags` is a `jsonb` list, not a boolean, so FR-09 can say *why* (migration
+  `0004_run_flags.sql`, 2026-10-15). Decided by PRD §6, shape chosen by the agent.
+- **The worker compiles the graph with LangGraph's Postgres saver, thread = submission id, one saver per
+  batch pass.** Options: no checkpointer (job-level retry only — simpler, and it already resumes a
+  *submission* from scratch, which is acceptable for a 3-attempt queue) or a saver per job (a connect per
+  job on a 25-job pass). PRD §6/§8 name Postgres checkpointing, so it is wired rather than dropped; one
+  saver per pass keeps the cost at one connection. Checkpoint tables are LangGraph's, so
+  `scripts/setup_checkpointer.py` creates them and grants the runtime role — not a migration.
+- **Retry budget: `MAX_ATTEMPTS = 3` per job, `BATCH = 25` per pass, `limit` on the API.** Options: an
+  unbounded pass (a batch could pin a worker for minutes with a slow provider, and an offline provider
+  would burn every retry in one call) or per-submission retries only. The bounded pass keeps the UI
+  responsive and makes a failure cost one pass, not one batch.
+- **Run-to-run variance (PRD §11: 3–5 repeats per dimension, mean ± SD) is *not* implemented**: phase 4
+  makes one LLM call per dimension per submission. Options: implement it now, inside the pipeline, or
+  take it in phase 6 with the other research features. Not decided by the agent, because it changes run
+  semantics and multiplies the batch's token cost — raised to Atthar and recorded in PRD §14.
+- **Verification ran with a stubbed provider**, because no API key exists in this environment: the real
+  corpus (`samples/`, the four archived AI-permitted submissions) was pushed through ingest → jobs →
+  graph → persistence → results with a stub that quotes each submission's own text. 20 evidence spans
+  were checked to reproduce their quote at their offsets in the real Indonesian text; 24 checkpoint rows
+  were written. **Consequence, stated plainly:** JSON-mode adherence, latency and Bahasa Indonesia
+  scoring quality are unmeasured until a key exists, and the calibration examples remain empty
+  (`pending_atthar`), so a real run refuses with `MissingCalibration` by design.
+
 ## 2026-10-14 (later) — Hosting settled: local backend + optional tunnel; Neon role corrected
 
 **Decision.** The API runs on the owner's Mac — natively via `scripts/dev.sh`, or in Docker for production-image parity — against Neon. For remote demonstrations it is exposed through a **Cloudflare Quick Tunnel**, which needs no account and no card. Render, Cloud Run and every other card-verified host are closed: the same card fails verification everywhere, including Render's manual Web Service flow, which was the last card-free candidate.
