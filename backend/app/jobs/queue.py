@@ -43,11 +43,17 @@ def enqueue_run(conn: Connection, *, owner_id: UUID, run_id: UUID, submission_id
         return cur.rowcount
 
 
-def claim_jobs(conn: Connection, *, owner_id: UUID, limit: int) -> list[dict]:
-    """Claim up to `limit` queued jobs of this owner, marking them `running`.
+def claim_jobs(conn: Connection, *, owner_id: UUID, run_id: UUID, limit: int) -> list[dict]:
+    """Claim up to `limit` queued jobs **of this run**, marking them `running`.
 
     Called with a `db.tenant_tx(owner_id)` connection; `owner_id` is repeated in the predicate so
     the query states which tenant it serves rather than relying on the policy alone.
+
+    `run_id` is in the predicate for a reason that is not obvious: the caller persists the returned
+    states under the run it asked about, so claiming another run's job would attach that
+    submission's scores to the wrong run — and the run is the unit the thesis traces back to its
+    rubric, prompts and model snapshot. Before this filter existed, a lecturer with two queued runs
+    got exactly that (seen live, 2026-10-16).
 
     `FOR UPDATE SKIP LOCKED` is what makes a claim exclusive: a second claimant steps over the rows
     this transaction has locked instead of blocking on them or handing the same job out twice. The
@@ -65,7 +71,7 @@ def claim_jobs(conn: Connection, *, owner_id: UUID, limit: int) -> list[dict]:
             """
             with claimed as (
                 select id from jobs
-                where owner_id = %s and status = 'queued'
+                where owner_id = %s and run_id = %s and status = 'queued'
                 order by created_at
                 limit %s
                 for update skip locked
@@ -75,6 +81,6 @@ def claim_jobs(conn: Connection, *, owner_id: UUID, limit: int) -> list[dict]:
             where jobs.id = claimed.id
             returning jobs.id, jobs.run_id, jobs.submission_id, jobs.attempts
             """,
-            (owner_id, limit),
+            (owner_id, run_id, limit),
         )
         return cur.fetchall()

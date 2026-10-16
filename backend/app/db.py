@@ -32,6 +32,15 @@ def pool() -> ConnectionPool:
             # Neon's pooler runs PgBouncer in transaction mode:
             # prepare_threshold=None disables server-side named prepared statements,
             # which break when subsequent queries on the same client hit different backend connections.
+            #
+            # `check` is what survives Neon's free tier suspending an idle compute: the server closes
+            # the socket, the client does not know, and the next query on that pooled connection raised
+            # "SSL connection has been closed unexpectedly", turning a `/auth/me` into a 500 (seen live,
+            # 2026-10-16). It costs one round trip per checkout, deliberately paid on a free tier.
+            # [UNVERIFIED locally]: local Postgres closes the connection in a way psycopg_pool already
+            # detects, so no test here can reproduce the silent death; the evidence is the documented
+            # remedy plus the absence of those 500s in use.
+            check=ConnectionPool.check_connection,
             kwargs={"autocommit": False, "prepare_threshold": None},
         )
     return _pool

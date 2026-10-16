@@ -104,7 +104,7 @@ def make_lecturer(submissions: int = 3, *, rubric: bool = True, calibration: boo
                 "update runs set rubric_version_id = %s, prompt_version_ids = %s where id = %s",
                 (version, prompt_ids, run),
             )
-    return {"owner": owner, "run": run, "submissions": ids}
+    return {"owner": owner, "run": run, "submissions": ids, "assignment": assignment}
 
 
 def job_rows(owner: uuid.UUID, run: uuid.UUID) -> list[dict]:
@@ -165,17 +165,47 @@ def test_claim_respects_the_limit_and_never_reaches_another_tenant():
             )
 
     with db.tenant_tx(mine["owner"]) as conn:
-        claimed = claim_jobs(conn, owner_id=mine["owner"], limit=2)
+        claimed = claim_jobs(conn, owner_id=mine["owner"], run_id=mine["run"], limit=2)
         assert len(claimed) == 2
         assert {job["run_id"] for job in claimed} == {mine["run"]}
         assert [job["attempts"] for job in claimed] == [0, 0]
-        assert claim_jobs(conn, owner_id=mine["owner"], limit=0) == []
+        assert claim_jobs(conn, owner_id=mine["owner"], run_id=mine["run"], limit=0) == []
 
     assert [job["status"] for job in job_rows(theirs["owner"], theirs["run"])] == ["queued"] * 3
     assert [job["status"] for job in job_rows(mine["owner"], mine["run"])] == ["running"] * 2 + ["queued"]
 
     with db.tenant_tx(mine["owner"]) as conn:
-        assert len(claim_jobs(conn, owner_id=mine["owner"], limit=10)) == 1
+        assert len(claim_jobs(conn, owner_id=mine["owner"], run_id=mine["run"], limit=10)) == 1
+
+
+def test_a_claim_never_reaches_another_run_of_the_same_owner():
+    """Two runs of one lecturer are two separate units of evidence.
+
+    The caller persists the states it claimed under the run it asked about, so claiming the other
+    run's job would file one run's scores under another run's rubric, prompts and model snapshot.
+    That happened live on 2026-10-16, while the claim was owner-scoped.
+    """
+    lecturer = make_lecturer(1)
+    second = uuid.uuid4()
+    with db.tenant_tx(lecturer["owner"]) as conn, conn.cursor() as cur:
+        cur.execute(
+            "insert into runs (id, owner_id, assignment_id, mode) values (%s, %s, %s, 'multi_agent')",
+            (second, lecturer["owner"], lecturer["assignment"]),
+        )
+    for run in (lecturer["run"], second):
+        with db.tenant_tx(lecturer["owner"]) as conn:
+            enqueue_run(
+                conn,
+                owner_id=lecturer["owner"],
+                run_id=run,
+                submission_ids=lecturer["submissions"],
+            )
+
+    with db.tenant_tx(lecturer["owner"]) as conn:
+        claimed = claim_jobs(conn, owner_id=lecturer["owner"], run_id=lecturer["run"], limit=10)
+
+    assert [job["run_id"] for job in claimed] == [lecturer["run"]]
+    assert [job["status"] for job in job_rows(lecturer["owner"], second)] == ["queued"]
 
 
 def test_a_claimed_job_is_not_claimed_twice():
@@ -188,9 +218,9 @@ def test_a_claimed_job_is_not_claimed_twice():
             submission_ids=lecturer["submissions"],
         )
     with db.tenant_tx(lecturer["owner"]) as conn:
-        first = claim_jobs(conn, owner_id=lecturer["owner"], limit=10)
+        first = claim_jobs(conn, owner_id=lecturer["owner"], run_id=lecturer["run"], limit=10)
     with db.tenant_tx(lecturer["owner"]) as conn:
-        assert claim_jobs(conn, owner_id=lecturer["owner"], limit=10) == []
+        assert claim_jobs(conn, owner_id=lecturer["owner"], run_id=lecturer["run"], limit=10) == []
     assert len(first) == 2
 
 
@@ -279,7 +309,7 @@ def test_process_run_resumes_jobs_left_running_by_a_crash(monkeypatch):
         )
     # What a process killed between the claim and the outcome leaves behind.
     with db.tenant_tx(lecturer["owner"]) as conn:
-        assert len(claim_jobs(conn, owner_id=lecturer["owner"], limit=1)) == 1
+        assert len(claim_jobs(conn, owner_id=lecturer["owner"], run_id=lecturer["run"], limit=1)) == 1
     stub_graph(monkeypatch)
 
     summary = worker.process_run(lecturer["owner"], lecturer["run"], limit=1)

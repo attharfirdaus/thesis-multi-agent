@@ -226,8 +226,8 @@ export const api = {
   createRun: (assignmentId: string, mode = "multi_agent") =>
     request<RunSummary>(`/assignments/${assignmentId}/runs?mode=${mode}`, { method: "POST" }),
 
-  processRun: (runId: string, limit: number) =>
-    request<RunSummary>(`/runs/${runId}/process?limit=${limit}`, { method: "POST" }),
+  processRun: (runId: string, limit: number, signal?: AbortSignal) =>
+    request<RunSummary>(`/runs/${runId}/process?limit=${limit}`, { method: "POST", signal }),
 
   getRun: (runId: string) => request<RunSummary>(`/runs/${runId}`),
 

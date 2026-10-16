@@ -193,6 +193,10 @@ def test_a_failing_cognitive_agent_keeps_the_metacognitive_result(prompt_calls):
     assert result["cognitive"] is None
     assert COGNITIVE_FAILED in result["flags"]
     assert any("provider unreachable" in message for message in result["errors"])
+    # A call that raised has no client-reported latency, so the node measures it: the duration of a
+    # failed call is the number that says the provider is unhealthy, and it was null before this.
+    assert result["latencies"]["cognitive"] >= 0
+    assert result["latencies"]["metacognitive"] == 1
     assert result["metacognitive"].findings[0].evidence_quote == METACOGNITIVE_QUOTE
     assert result["synthesis"] is not None
     # Synthesis still ran, and it was told only what the pipeline actually produced.

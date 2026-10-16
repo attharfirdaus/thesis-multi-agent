@@ -198,7 +198,9 @@ def process_run(owner_id: UUID, run_id: UUID, limit: int | None = None) -> dict:
     summary: dict = {"claimed": 0, "done": 0, "failed": 0, "skipped": 0, "states": []}
     with db.tenant_tx(owner_id) as conn:
         _requeue_stale(conn, owner_id=owner_id, run_id=run_id)
-        jobs = claim_jobs(conn, owner_id=owner_id, limit=BATCH if limit is None else limit)
+        jobs = claim_jobs(
+            conn, owner_id=owner_id, run_id=run_id, limit=BATCH if limit is None else limit
+        )
         if jobs:
             # FR-13 keeps the run's own timestamps, and nobody wrote `started_at` before this. It marks
             # the first claim rather than the creation of the run, so a run left queued overnight says

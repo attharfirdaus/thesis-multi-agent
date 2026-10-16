@@ -47,6 +47,10 @@ def _model_config() -> dict:
         "temperature": settings.llm_temperature,
         "seed": settings.llm_seed,
         "max_attempts": settings.llm_max_attempts,
+        # The timeout is not a scoring parameter, but it decides whether a call gets the chance to
+        # score at all: a dimension that failed on three timeouts is only explicable if the run says
+        # what the budget was (FR-13 asks for the parameters, and this one changed after 2026-10-16).
+        "timeout_seconds": settings.llm_timeout_seconds,
     }
 
 

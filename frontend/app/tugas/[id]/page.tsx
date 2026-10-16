@@ -20,7 +20,22 @@ const PROCESS_CHUNK = 2;
 /** Consecutive calls that finished no job mean the batch is stuck; stop driving and let the lecturer decide. */
 const MAX_STALLED = 2;
 
+/**
+ * Bound on one process request. The backend's own worst case is three 120-second attempts per agent,
+ * so this is generous on purpose; it exists only so a dead connection cannot pin the page for ever.
+ */
+const PROCESS_TIMEOUT_MS = 30 * 60 * 1000;
+
 const ACCEPTED_FILES = ".pdf,.docx,.txt,.zip";
+
+/** Jobs the queue still owns. A `running` job is already claimed, so it must not be started again. */
+const pendingJobs = (jobs: RunSummary["jobs"]) => (jobs.queued ?? 0) + (jobs.running ?? 0);
+
+function duration(seconds: number): string {
+  const minutes = Math.floor(seconds / 60);
+  const rest = seconds % 60;
+  return minutes === 0 ? `${rest} detik` : `${minutes} menit ${rest} detik`;
+}
 
 /** The English exception text and the stored caveats, kept for the developer rather than the lecturer. */
 function TechnicalDetail({ lines }: { lines: string[] }) {
@@ -51,9 +66,13 @@ export default function TugasPage() {
   const [note, setNote] = useState<string | null>(null);
   const [uploading, setUploading] = useState(false);
   const [driving, setDriving] = useState(false);
+  const [calling, setCalling] = useState(false);
+  const [elapsed, setElapsed] = useState(0);
   const fileInput = useRef<HTMLInputElement>(null);
   const drivingRun = useRef<string | null>(null);
   const resumedRun = useRef<string | null>(null);
+  const callStartedAt = useRef(0);
+  const starting = useRef(false);
 
   const load = useCallback(
     () =>
@@ -73,6 +92,18 @@ export default function TugasPage() {
   }, [load]);
 
   /**
+   * A provider call reports nothing until it returns, so elapsed time is the only honest liveness
+   * signal the page can show while one submission is being judged.
+   */
+  useEffect(() => {
+    if (!calling) return;
+    const timer = setInterval(() => {
+      setElapsed(Math.round((Date.now() - callStartedAt.current) / 1000));
+    }, 1000);
+    return () => clearInterval(timer);
+  }, [calling]);
+
+  /**
    * Drive a run to completion. Each call evaluates a bounded chunk; the run itself lives in the
    * database, so closing this tab loses only the loop, and a reload resumes it from `jobs`.
    */
@@ -88,7 +119,17 @@ export default function TugasPage() {
 
       try {
         for (;;) {
-          await api.processRun(runId, PROCESS_CHUNK);
+          const controller = new AbortController();
+          const timeout = setTimeout(() => controller.abort(), PROCESS_TIMEOUT_MS);
+          callStartedAt.current = Date.now();
+          setElapsed(0);
+          setCalling(true);
+          try {
+            await api.processRun(runId, PROCESS_CHUNK, controller.signal);
+          } finally {
+            clearTimeout(timeout);
+            setCalling(false);
+          }
           const current = await api.getRun(runId);
           setRun(current);
           const { done, failed, queued } = jobTotals(current.jobs);
@@ -105,7 +146,12 @@ export default function TugasPage() {
           }
         }
       } catch (err) {
-        setError(err instanceof Error ? err.message : "Penilaian gagal dijalankan.");
+        // The work already done is in the database, so a dead request loses nothing but this loop.
+        if (err instanceof DOMException && err.name === "AbortError") {
+          setNote("Permintaan penilaian melewati batas waktu tunggu. Penilaian dapat dilanjutkan.");
+        } else {
+          setError(err instanceof Error ? err.message : "Penilaian gagal dijalankan.");
+        }
       } finally {
         drivingRun.current = null;
         setDriving(false);
@@ -115,14 +161,24 @@ export default function TugasPage() {
     [load],
   );
 
-  const latest = detail?.latest_run ?? null;
+  const submissions = detail?.submissions ?? [];
+  const totals = run ? jobTotals(run.jobs) : null;
+  // Every run of this assignment that still owns a job, the one on screen first. A `running` job counts
+  // on purpose: if the process that held its lease died, only a process call releases it, so this run
+  // must block a *new* run while staying reachable through the control below.
+  const liveRuns = detail
+    ? [...(run ? [run] : []), ...detail.runs.filter((item) => item.id !== run?.id)]
+    : [];
+  const unfinishedRunId = liveRuns.find((item) => pendingJobs(item.jobs) > 0)?.id ?? null;
+
+  // Self-healing after a crash or a closed tab: one process call is idempotent, and it is what clears a
+  // stale lease, so an unfinished run is picked up again as soon as the page is open.
   useEffect(() => {
-    if (!latest || latest.status === "done" || latest.status === "failed") return;
-    if ((latest.jobs?.queued ?? 0) === 0) return;
-    if (resumedRun.current === latest.id) return;
-    resumedRun.current = latest.id;
-    void drive(latest.id);
-  }, [latest, drive]);
+    if (unfinishedRunId === null) return;
+    if (resumedRun.current === unfinishedRunId) return;
+    resumedRun.current = unfinishedRunId;
+    void drive(unfinishedRunId);
+  }, [unfinishedRunId, drive]);
 
   async function onUpload(event: React.FormEvent) {
     event.preventDefault();
@@ -147,22 +203,24 @@ export default function TugasPage() {
   }
 
   async function onStart() {
-    if (run && !window.confirm("Jalankan penilaian lagi? Layar hasil akan menampilkan penilaian terbaru.")) {
-      return;
-    }
-    setError(null);
+    // A double press must not create a second run: the first request may not have returned yet.
+    if (starting.current) return;
+    starting.current = true;
     try {
+      if (run && !window.confirm("Jalankan penilaian lagi? Layar hasil akan menampilkan penilaian terbaru.")) {
+        return;
+      }
+      setError(null);
       const created = await api.createRun(id);
       setRun(created);
       resumedRun.current = created.id;
       await drive(created.id);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Gagal memulai penilaian.");
+    } finally {
+      starting.current = false;
     }
   }
-
-  const submissions = detail?.submissions ?? [];
-  const totals = run ? jobTotals(run.jobs) : null;
 
   return (
     <AppShell>
@@ -285,15 +343,43 @@ export default function TugasPage() {
                 </p>
               )}
 
-              <div>
+              {driving ? (
+                <div className="flex flex-col gap-2">
+                  <div
+                    role="progressbar"
+                    aria-label="Penilaian sedang berjalan"
+                    className="h-2 w-full overflow-hidden rounded-full bg-muted"
+                  >
+                    <div className="h-full w-1/3 animate-pulse rounded-full bg-primary" />
+                  </div>
+                  <p className="text-sm text-muted-foreground">
+                    {calling
+                      ? `Menilai… ${duration(elapsed)}`
+                      : "Menilai… menyiapkan kiriman berikutnya."}
+                  </p>
+                </div>
+              ) : null}
+
+              <div className="flex flex-col gap-2">
                 <Button
-                  onClick={onStart}
-                  disabled={driving || submissions.length === 0}
+                  onClick={unfinishedRunId !== null ? () => void drive(unfinishedRunId) : onStart}
+                  disabled={driving || (unfinishedRunId === null && submissions.length === 0)}
+                  className="self-start"
                 >
-                  {driving ? "Menilai…" : totals && totals.queued > 0 ? "Lanjutkan penilaian" : "Jalankan penilaian"}
+                  {driving
+                    ? "Penilaian sedang berjalan…"
+                    : unfinishedRunId !== null
+                      ? "Lanjutkan penilaian"
+                      : "Jalankan penilaian"}
                 </Button>
-                {submissions.length === 0 ? (
-                  <p className="mt-2 text-sm text-muted-foreground">
+                {unfinishedRunId !== null ? (
+                  <p className="text-sm text-muted-foreground">
+                    Kiriman yang sedang dinilai tidak dinilai dua kali; tombol ini melanjutkan penilaian yang
+                    belum selesai.
+                  </p>
+                ) : null}
+                {unfinishedRunId === null && submissions.length === 0 ? (
+                  <p className="text-sm text-muted-foreground">
                     Unggah minimal satu kiriman sebelum menilai.
                   </p>
                 ) : null}

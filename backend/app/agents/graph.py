@@ -22,6 +22,7 @@ update for an undeclared key silently, so a mistyped key looks like a node that 
 nothing. Add the field to the model first, then return it.
 """
 
+import time
 from collections.abc import Callable, Iterator
 from typing import Any, Literal, cast
 
@@ -95,6 +96,16 @@ def _client(client: ProviderClient | None) -> ProviderClient:
     return client if client is not None else ProviderClient()
 
 
+def _elapsed_ms(started: float) -> int:
+    """Wall-clock since `started`, for the failure path.
+
+    The client reports the latency of a call that returned. A call that raised — three timed-out
+    attempts, say — reports nothing, and that duration is exactly the number that says the provider is
+    unhealthy: it was null in every failed trace until this existed (seen live, 2026-10-16).
+    """
+    return int((time.monotonic() - started) * 1000)
+
+
 def _agent_quotes(state: GraphState) -> Iterator[tuple[QuoteSource, str]]:
     """Every quote an agent claims to have taken from the student's analysis, with its source.
 
@@ -126,6 +137,7 @@ def _failure(flag: str, exc: Exception) -> dict[str, Any]:
 
 def _cognitive_node(client: ProviderClient | None) -> Callable[[GraphState], dict[str, Any]]:
     def node(state: GraphState) -> dict[str, Any]:
+        started = time.monotonic()
         try:
             system, user = prompts.cognitive_prompt(
                 rubric=state["rubric"],
@@ -138,7 +150,11 @@ def _cognitive_node(client: ProviderClient | None) -> Callable[[GraphState], dic
             # is the exact tautology risk the PRD tells this system to interrogate rather than hide.
             raise
         except Exception as exc:
-            return {"cognitive": None, **_failure(COGNITIVE_FAILED, exc)}
+            return {
+                "cognitive": None,
+                "latencies": {"cognitive": _elapsed_ms(started)},
+                **_failure(COGNITIVE_FAILED, exc),
+            }
         return {
             "cognitive": _parsed(completion.parsed, CognitiveResult),
             "latencies": {"cognitive": completion.latency_ms},
@@ -149,6 +165,7 @@ def _cognitive_node(client: ProviderClient | None) -> Callable[[GraphState], dic
 
 def _metacognitive_node(client: ProviderClient | None) -> Callable[[GraphState], dict[str, Any]]:
     def node(state: GraphState) -> dict[str, Any]:
+        started = time.monotonic()
         try:
             system, user = prompts.metacognitive_prompt(
                 rubric=state["rubric"],
@@ -161,7 +178,11 @@ def _metacognitive_node(client: ProviderClient | None) -> Callable[[GraphState],
         except prompts.MissingCalibration:
             raise
         except Exception as exc:
-            return {"metacognitive": None, **_failure(METACOGNITIVE_FAILED, exc)}
+            return {
+                "metacognitive": None,
+                "latencies": {"metacognitive": _elapsed_ms(started)},
+                **_failure(METACOGNITIVE_FAILED, exc),
+            }
         return {
             "metacognitive": _parsed(completion.parsed, MetacognitiveResult),
             "latencies": {"metacognitive": completion.latency_ms},
@@ -195,10 +216,15 @@ def _synthesise(
 def _synthesis_node(client: ProviderClient | None) -> Callable[[GraphState], dict[str, Any]]:
     def node(state: GraphState) -> dict[str, Any]:
         unverified = _unverified(state)
+        started = time.monotonic()
         try:
             synthesis, latency = _synthesise(state, client, retry_reason=None)
         except Exception as exc:
-            return {"synthesis": None, **_failure(SYNTHESIS_FAILED, exc)}
+            return {
+                "synthesis": None,
+                "latencies": {"synthesis": _elapsed_ms(started)},
+                **_failure(SYNTHESIS_FAILED, exc),
+            }
 
         flags: list[str] = []
         errors: list[str] = []
