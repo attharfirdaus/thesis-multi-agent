@@ -12,7 +12,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { api, type AssignmentDetail, type ImportedFile, type RunSummary } from "@/lib/api";
-import { flagSentence, warningSentence } from "@/lib/labels";
+import { flagSentences, warningSentence } from "@/lib/labels";
 
 /** Jobs per request: one call must not sit on the whole batch, and the page shows progress between calls. */
 const PROCESS_CHUNK = 2;
@@ -534,7 +534,7 @@ export default function TugasPage() {
                               <div className="flex flex-col gap-1">
                                 <StatusBadge tone="amber" label="Perlu Ditinjau" className="self-start" />
                                 <span className="text-muted-foreground">
-                                  {submission.review_flags.map(flagSentence).join(" ")}
+                                  {flagSentences(submission.review_flags).join(" ")}
                                 </span>
                               </div>
                             ) : (

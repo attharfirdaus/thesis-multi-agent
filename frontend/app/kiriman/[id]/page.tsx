@@ -13,7 +13,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { api, type Score, type SubmissionDetail } from "@/lib/api";
 import { buildSegments, combinedDocument } from "@/lib/evidence";
-import { flagSentence, scoreLevel } from "@/lib/labels";
+import { flagSentences, scoreLevel } from "@/lib/labels";
 
 const DIMENSION_LABEL: Record<Score["dimension"], string> = {
   cognitive: "Tingkat Kognitif",
@@ -282,7 +282,7 @@ export default function KirimanPage() {
           {detail.review_flags?.length ? (
             <Alert>
               <AlertDescription>
-                Kiriman ini perlu ditinjau: {detail.review_flags.map(flagSentence).join(" ")}
+                Kiriman ini perlu ditinjau: {flagSentences(detail.review_flags).join(" ")}
               </AlertDescription>
             </Alert>
           ) : null}

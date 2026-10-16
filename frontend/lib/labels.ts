@@ -5,15 +5,25 @@
  * leak a raw identifier into the interface.
  */
 
-const FLAG_SENTENCES: Record<string, string> = {
+export const FLAG_SENTENCES: Record<string, string> = {
   cognitive_agent_failed: "Penilaian tingkat kognitif gagal — coba jalankan ulang.",
   metacognitive_agent_failed: "Penilaian indikator metakognitif gagal — coba jalankan ulang.",
   synthesis_agent_failed: "Penjelasan dan umpan balik belum bisa dibuat.",
   synthesis_retried: "Penjelasan disusun ulang karena kutipan tidak ditemukan.",
+  evidence_unverified: "Kutipan bukti tidak ditemukan pada tulisan mahasiswa.",
   needs_review: "Perlu ditinjau dosen.",
 };
 
-export const flagSentence = (code: string): string => FLAG_SENTENCES[code] ?? "Perlu ditinjau dosen.";
+/** The generic sentence an unmapped code falls back to. */
+export const FLAG_FALLBACK = "Perlu ditinjau dosen.";
+
+/**
+ * One statement per distinct meaning: two flags may legitimately resolve to the same sentence (that is
+ * what the fallback does), and the lecturer should read each statement once.
+ */
+export function flagSentences(codes: string[]): string[] {
+  return [...new Set(codes.map((code) => FLAG_SENTENCES[code] ?? FLAG_FALLBACK))];
+}
 
 /**
  * A metacognitive score stores presence instead of a strength when an agent reports one without the

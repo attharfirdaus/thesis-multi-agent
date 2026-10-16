@@ -1,5 +1,6 @@
 /**
- * Runnable check for the reading-pane slicer (FR-10) and the review-flag wording (PRD §9).
+ * Runnable check for the reading-pane slicer (FR-10), the review-flag wording (PRD §9) and the
+ * guarantee that every flag token the backend defines has its own sentence.
  *
  * `node --experimental-strip-types scripts/check-evidence.ts` runs it; there is no test runner in the
  * frontend, and the slicer is the one piece of client logic where an off-by-one silently corrupts the
@@ -7,10 +8,17 @@
  */
 
 import assert from "node:assert/strict";
+import { readdirSync, readFileSync } from "node:fs";
+import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 
 import type { Evidence, Score } from "../lib/api.ts";
 import { buildSegments, combinedDocument } from "../lib/evidence.ts";
-import { flagSentence, scoreLevel, warningSentence } from "../lib/labels.ts";
+import { FLAG_FALLBACK, FLAG_SENTENCES, flagSentences, scoreLevel, warningSentence } from "../lib/labels.ts";
+
+/** The flag tokens live with the agents that write them; the scan reads them rather than a copy. */
+const AGENT_SOURCES = fileURLToPath(new URL("../../backend/app/agents/", import.meta.url));
+const FLAG_CONSTANT = /^[A-Z_]+ = "([a-z0-9_]+)"$/gm;
 
 const text =
   "Keluaran AI menyebut inflasi sebagai penyebab. Siswa meneliti laporan BPS. " +
@@ -77,21 +85,43 @@ assert.equal(document.slice(0, aiSegment.length), aiSegment);
 assert.equal(document.slice(aiSegment.length), `\n${text}`);
 assert.equal(combinedDocument("", text), text);
 
-// 9. every known flag reads as a sentence, and an unknown code never leaks as itself
-for (const code of [
-  "cognitive_agent_failed",
-  "metacognitive_agent_failed",
-  "synthesis_agent_failed",
-  "synthesis_retried",
-  "needs_review",
-]) {
-  const sentence = flagSentence(code);
-  assert.notEqual(sentence, code);
-  assert.equal(sentence.endsWith("."), true);
+// 9. every flag token the backend defines has its own sentence, and the map holds no stray code.
+//    Membership is what is asserted, not the wording: `needs_review` deliberately reads the same as
+//    FLAG_FALLBACK, so comparing sentences would either forbid that or pass a lazy copy of it.
+const backendFlags = new Set<string>();
+for (const name of readdirSync(AGENT_SOURCES)) {
+  if (!name.endsWith(".py")) continue;
+  for (const match of readFileSync(join(AGENT_SOURCES, name), "utf8").matchAll(FLAG_CONSTANT)) {
+    backendFlags.add(match[1]);
+  }
 }
-const unknown = flagSentence("some_flag_from_the_future");
-assert.notEqual(unknown, "some_flag_from_the_future");
-assert.equal(unknown.includes("_"), false);
+assert.notEqual(
+  backendFlags.size,
+  0,
+  `no flag constant found under ${AGENT_SOURCES} - check the path and the pattern`,
+);
+for (const code of backendFlags) {
+  assert.equal(
+    Object.hasOwn(FLAG_SENTENCES, code),
+    true,
+    `the backend defines ${code} and the UI has no sentence for it`,
+  );
+  assert.notEqual(flagSentences([code])[0], code, `${code} must not reach the lecturer`);
+}
+for (const code of Object.keys(FLAG_SENTENCES)) {
+  assert.equal(
+    backendFlags.has(code),
+    true,
+    `the UI maps ${code}, which the backend does not define`,
+  );
+}
+
+// 9b. two flags that resolve to the same text are shown once, and an unknown code falls back
+assert.equal(flagSentences(["needs_review", "evidence_unverified", "needs_review"]).length, 2);
+assert.equal(flagSentences(["evidence_unverified"])[0], FLAG_SENTENCES.evidence_unverified);
+assert.equal(flagSentences(["some_flag_from_the_future"])[0], FLAG_FALLBACK);
+assert.equal(FLAG_FALLBACK.includes("_"), false);
+assert.equal(flagSentences(["unknown_a", "unknown_b"]).length, 1);
 
 // 10. the presence words never reach the lecturer, and the rubric's own words pass through
 assert.equal(scoreLevel("absent"), "Tidak ditemukan");
@@ -120,4 +150,4 @@ const unknownWarning = warningSentence("Some unexpected extractor note.");
 assert.notEqual(unknownWarning, "Some unexpected extractor note.");
 assert.equal(unknownWarning.includes("extractor"), false);
 
-console.log("check-evidence: 11 assertion groups passed");
+console.log(`check-evidence: all assertion groups passed (${backendFlags.size} backend flag tokens)`);

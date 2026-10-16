@@ -42,7 +42,7 @@ the running app with a throwaway account, because the tests cannot see the queue
 | after the in-flight submission finished | run stayed `cancelled`, job `done`, 5 scores and feedback stored — the documented "one graded submission, not a resumed run" |
 | cancel a finished run | 409, and the run stayed `done` |
 
-**Two more defects that only the live pass could show**, both fixed in the same commit:
+**Three more defects that only the live pass could show**, all fixed in the same work:
 
 - **The run's status lagged its own work.** While a pass was grading, `GET /runs/{id}` still answered
   `queued` — the status was only written at the end of the request — and a run driven from the command line
@@ -55,6 +55,30 @@ the running app with a throwaway account, because the tests cannot see the queue
   silently until someone needed to resume. The saver now names them explicitly
   (`CHECKPOINT_STATE_TYPES`) instead of relying on the permissive default. Verified live: zero warnings in a
   full pass afterwards.
+- **The command line graded submissions and threw the scores away.** Only the API endpoint called
+  `persist_submission_result`, so `python -m app.jobs.worker` — documented as a driver of the same call and
+  used as the resume path — completed jobs, reported `{"done": 1}` and stored nothing. A cancelled run
+  showed the same shape: the counts said "2 selesai" while the results were empty, because the endpoint
+  persisted once, after the whole pass returned. Both are fixed by persisting inside the worker as each job
+  finishes, in the same transaction that marks the job done, so a job can never be `done` with nothing
+  stored. Verified live and by a test that fails without it (`assert 0 > 0`); the endpoint's duplicate
+  persist loop is gone.
+
+**The UI half landed** in the same commit as the worker changes (its message only names those): a 3-second
+poll of `GET /runs/{id}` while a process call is open — necessary because `in_flight` is only populated
+mid-call, since the process response arrives after the submission it claimed is already done — so the card
+can read "Sedang menilai S-…", "N dari M selesai" and the non-zero counters; one base-layer CSS rule giving
+every button a pointer cursor and every disabled control `not-allowed` (which required dropping
+`disabled:pointer-events-none`, since hit-testing skipped the disabled button and the cursor was never
+shown); and a cancel control that confirms with what is lost and what is not, aborts the request, and
+reports the returned state.
+
+**And one gap of mine that the live run exposed:** I told the frontend that the flag vocabulary was "exactly
+five values, exhaustive". It is six — `evidence_unverified` reaches `review_flags` — and the screen showed
+"Perlu ditinjau dosen." twice for it. The mapping is now six sentences, the list de-duplicates identical
+statements, and the runnable check no longer trusts anyone's memory: it reads the flag constants out of
+`backend/app/agents/` and fails if a code has no sentence or a sentence has no code. That guard was proven to
+fail on both kinds of gap before it was accepted.
 
 ## 2026-10-16 — First real use: four defects found and fixed
 

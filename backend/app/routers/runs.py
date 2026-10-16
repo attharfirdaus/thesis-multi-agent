@@ -15,7 +15,6 @@ from fastapi import APIRouter, HTTPException, Query, Request, status
 from psycopg.rows import dict_row
 
 from app import db
-from app.agents.persist import persist_submission_result
 from app.config import get_settings
 from app.jobs.queue import enqueue_run
 from app.jobs.worker import process_run
@@ -167,36 +166,28 @@ def process_jobs(
     user: CurrentUser,
     limit: Annotated[int, Query(ge=1, le=200)] = 10,
 ) -> RunOut:
-    """Run up to `limit` queued jobs and persist whatever they produced."""
+    """Run up to `limit` queued jobs. The worker stores each result as its job finishes, so a pass that is
+    interrupted — or cancelled — leaves exactly the submissions it completed, not an empty run."""
     require_csrf(request)
     summary = process_run(user.id, run_id, limit=limit)
 
-    with db.tenant_tx(user.id) as conn:
-        for state in summary.get("states", []):
-            persist_submission_result(
-                conn,
-                owner_id=user.id,
-                run_id=run_id,
-                submission_id=uuid.UUID(str(state["submission_id"])),
-                state=state,
-            )
-        with conn.cursor(row_factory=dict_row) as cur:
-            unfinished = _count(
-                cur.execute(
-                    "select count(*) as n from jobs where run_id = %s and status in ('queued', 'running')",
-                    (run_id,),
-                ).fetchone()
-            )
-            # A cancelled run stays cancelled: this pass may finish the submission it was already
-            # grading, but it must not relabel the run as running again.
+    with db.tenant_tx(user.id) as conn, conn.cursor(row_factory=dict_row) as cur:
+        unfinished = _count(
             cur.execute(
-                "update runs set status = %s, finished_at = now() "
-                "where id = %s and owner_id = %s and status <> 'cancelled'",
-                ("running" if unfinished else "done", run_id, user.id),
-            )
-            return _run_out(
-                cur, run_id, processed=summary.get("done", 0), failed=summary.get("failed", 0)
-            )
+                "select count(*) as n from jobs where run_id = %s and status in ('queued', 'running')",
+                (run_id,),
+            ).fetchone()
+        )
+        # A cancelled run stays cancelled: this pass may finish the submission it was already
+        # grading, but it must not relabel the run as running again.
+        cur.execute(
+            "update runs set status = %s, finished_at = now() "
+            "where id = %s and owner_id = %s and status <> 'cancelled'",
+            ("running" if unfinished else "done", run_id, user.id),
+        )
+        return _run_out(
+            cur, run_id, processed=summary.get("done", 0), failed=summary.get("failed", 0)
+        )
 
 
 @router.post("/runs/{run_id}/cancel", response_model=RunOut)

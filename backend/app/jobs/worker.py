@@ -22,6 +22,7 @@ from psycopg.rows import dict_row
 from app import db
 from app.agents.graph import evaluate_submission
 from app.agents.models import GraphState
+from app.agents.persist import persist_submission_result
 from app.config import get_settings
 from app.jobs.queue import claim_jobs
 
@@ -138,11 +139,25 @@ def _record_failure(owner_id: UUID, job: dict, error: Exception) -> bool:
     return row[0] == "failed"
 
 
-def _mark_done(owner_id: UUID, job_id: UUID) -> None:
-    with db.tenant_tx(owner_id) as conn, conn.cursor() as cur:
-        cur.execute(
+def _finish(owner_id: UUID, job: dict, state: GraphState) -> None:
+    """Store the submission's result and mark its job done, in one transaction.
+
+    Both, or neither: a job marked `done` with nothing stored is a failure that looks like success. This is
+    also where the command line stopped persisting — the API endpoint was the only caller of
+    `persist_submission_result`, so `python -m app.jobs.worker` graded submissions and threw the scores
+    away, which is the exact opposite of what a resume tool may do (found live, 2026-10-16).
+    """
+    with db.tenant_tx(owner_id) as conn:
+        persist_submission_result(
+            conn,
+            owner_id=owner_id,
+            run_id=job["run_id"],
+            submission_id=UUID(str(state["submission_id"])),
+            state=state,
+        )
+        conn.execute(
             "update jobs set status = 'done', updated_at = now() where id = %s and owner_id = %s",
-            (job_id, owner_id),
+            (job["id"], owner_id),
         )
 
 
@@ -201,7 +216,7 @@ def _run_one(owner_id: UUID, job: dict, summary: dict, checkpointer=None) -> Non
         summary["failed" if _record_failure(owner_id, job, failure) else "skipped"] += 1
         return
 
-    _mark_done(owner_id, job["id"])
+    _finish(owner_id, job, result)
     summary["done"] += 1
     summary["states"].append(result)
 

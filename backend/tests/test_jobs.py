@@ -323,6 +323,32 @@ def test_process_run_resumes_jobs_left_running_by_a_crash(monkeypatch):
     assert [job["status"] for job in job_rows(lecturer["owner"], lecturer["run"])] == ["done", "queued"]
 
 
+def test_the_command_line_stores_its_results_and_not_only_the_api(monkeypatch):
+    """`python -m app.jobs.worker` is documented as a driver of the same call as the API.
+
+    Until this, it graded submissions and dropped the scores: the API endpoint was the only caller that
+    persisted, so a resume from a terminal produced a run with `done` jobs and nothing in it.
+    """
+    lecturer = make_lecturer(1)
+    with db.tenant_tx(lecturer["owner"]) as conn:
+        enqueue_run(
+            conn,
+            owner_id=lecturer["owner"],
+            run_id=lecturer["run"],
+            submission_ids=lecturer["submissions"],
+        )
+    stub_graph(monkeypatch)
+
+    summary = worker.process_run(lecturer["owner"], lecturer["run"])
+
+    assert summary["done"] == 1
+    with db.tenant_tx(lecturer["owner"]) as conn:
+        stored = conn.execute(
+            "select count(*) from system_scores where run_id = %s", (lecturer["run"],)
+        ).fetchone()[0]
+    assert stored > 0, "a pass that graded a submission must have stored its scores"
+
+
 def test_a_run_records_when_it_started_and_keeps_that_moment(monkeypatch):
     """FR-13 keeps the run's timestamps, and `runs.started_at` was written by nobody until this."""
     lecturer = make_lecturer(1)
