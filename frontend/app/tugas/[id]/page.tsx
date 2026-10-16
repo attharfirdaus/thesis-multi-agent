@@ -87,6 +87,8 @@ export default function TugasPage() {
   const [drivenRunId, setDrivenRunId] = useState<string | null>(null);
   const [cancellingRun, setCancellingRun] = useState(false);
   const [deletingId, setDeletingId] = useState<string | null>(null);
+  // The owner's default: a run spends quota on what has no result yet (PRD §11 keeps re-grading as a choice).
+  const [onlyUngraded, setOnlyUngraded] = useState(true);
   const fileInput = useRef<HTMLInputElement>(null);
   const drivingRun = useRef<string | null>(null);
   const resumedRun = useRef<string | null>(null);
@@ -215,6 +217,10 @@ export default function TugasPage() {
       (item) => !TERMINAL_RUN_STATUS.includes(item.status) && pendingJobs(item.jobs) > 0,
     )?.id ?? null;
   const inFlightNames = (run?.in_flight ?? []).map((item) => item.pseudonym);
+  const gradedCount = detail?.graded_count ?? 0;
+  const ungradedCount = Math.max((detail?.submission_count ?? 0) - gradedCount, 0);
+  const flaggedCount = submissions.filter((item) => (item.review_flags ?? []).length > 0).length;
+  const nothingToGrade = onlyUngraded && ungradedCount === 0;
   // Cancelling stops the run this page is working on; only then the one still holding queued jobs.
   const cancelTargetId = drivenRunId ?? unfinishedRunId;
 
@@ -254,11 +260,13 @@ export default function TugasPage() {
     if (starting.current) return;
     starting.current = true;
     try {
-      if (run && !window.confirm("Jalankan penilaian lagi? Layar hasil akan menampilkan penilaian terbaru.")) {
-        return;
-      }
+      // Only re-grading replaces the results a lecturer is already reading, so only it warns about that.
+      const question = onlyUngraded
+        ? `Nilai ${ungradedCount} kiriman yang belum dinilai? Hasil penilaian yang sudah ada tidak berubah.`
+        : "Jalankan penilaian lagi? Layar hasil akan menampilkan penilaian terbaru.";
+      if (run && !window.confirm(question)) return;
       setError(null);
-      const created = await api.createRun(id);
+      const created = await api.createRun(id, "multi_agent", onlyUngraded);
       setRun(created);
       resumedRun.current = created.id;
       await drive(created.id);
@@ -480,16 +488,65 @@ export default function TugasPage() {
                 </div>
               ) : null}
 
+              {/* The scope decides what the primary button spends quota on, so it sits directly above it. */}
+              {unfinishedRunId === null && !driving ? (
+                <fieldset className="flex flex-col gap-2">
+                  <legend className="text-sm font-medium">Kiriman yang dinilai</legend>
+                  <div className="flex items-start gap-2">
+                    <input
+                      id="scope_ungraded"
+                      type="radio"
+                      name="run_scope"
+                      className="mt-1"
+                      checked={onlyUngraded}
+                      onChange={() => setOnlyUngraded(true)}
+                    />
+                    <Label htmlFor="scope_ungraded" className="cursor-pointer">
+                      Hanya kiriman yang belum dinilai
+                    </Label>
+                  </div>
+                  <div className="flex items-start gap-2">
+                    <input
+                      id="scope_all"
+                      type="radio"
+                      name="run_scope"
+                      className="mt-1"
+                      checked={!onlyUngraded}
+                      onChange={() => setOnlyUngraded(false)}
+                    />
+                    <Label htmlFor="scope_all" className="cursor-pointer">
+                      Nilai ulang semua kiriman (termasuk yang sudah ada nilainya)
+                    </Label>
+                  </div>
+                  <p className="text-sm text-muted-foreground">
+                    {onlyUngraded
+                      ? `${ungradedCount} kiriman akan dinilai, ${gradedCount} sudah dinilai.`
+                      : `Semua ${detail?.submission_count ?? 0} kiriman akan dinilai ulang.`}
+                  </p>
+                  {onlyUngraded && flaggedCount > 0 ? (
+                    <p className="text-sm text-muted-foreground">
+                      {flaggedCount} kiriman perlu ditinjau dan tidak akan dinilai ulang dengan pilihan ini.
+                    </p>
+                  ) : null}
+                </fieldset>
+              ) : null}
+
               <div className="flex flex-wrap items-center gap-3">
                 <Button
                   onClick={unfinishedRunId !== null ? () => void drive(unfinishedRunId) : onStart}
-                  disabled={driving || (unfinishedRunId === null && submissions.length === 0)}
+                  disabled={
+                    driving ||
+                    (unfinishedRunId === null &&
+                      (submissions.length === 0 || nothingToGrade))
+                  }
                 >
                   {driving
                     ? "Penilaian sedang berjalan…"
                     : unfinishedRunId !== null
                       ? "Lanjutkan penilaian"
-                      : "Jalankan penilaian"}
+                      : onlyUngraded
+                        ? "Nilai kiriman baru"
+                        : "Nilai ulang semua kiriman"}
                 </Button>
                 {cancelTargetId !== null ? (
                   <Button
@@ -510,6 +567,11 @@ export default function TugasPage() {
               {cancelTargetId === null && submissions.length === 0 ? (
                 <p className="text-sm text-muted-foreground">
                   Unggah minimal satu kiriman sebelum menilai.
+                </p>
+              ) : null}
+              {cancelTargetId === null && submissions.length > 0 && nothingToGrade ? (
+                <p className="text-sm text-muted-foreground">
+                  Semua kiriman sudah dinilai. Pilih nilai ulang semua kiriman untuk menilai kembali.
                 </p>
               ) : null}
             </CardContent>

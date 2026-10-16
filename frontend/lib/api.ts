@@ -53,6 +53,8 @@ const MESSAGES_ID: Record<string, string> = {
   "The student's analysis cannot be empty.": "Analisis mahasiswa tidak boleh kosong.",
   "This submission is still queued or being graded; stop the run first.":
     "Kiriman ini masih menunggu atau sedang dinilai. Hentikan penilaian terlebih dahulu.",
+  "Every submission in this assignment has already been graded.":
+    "Semua kiriman pada tugas ini sudah dinilai.",
 };
 
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
@@ -105,6 +107,8 @@ export type AssignmentSummary = {
   prompt_text: string | null;
   created_at: string;
   submission_count: number;
+  /** How many of its submissions any run has already scored; the rest is what `only_ungraded` covers. */
+  graded_count: number;
   latest_run: RunSummary | null;
 };
 
@@ -238,8 +242,11 @@ export const api = {
       body: JSON.stringify({ analysis_start: analysisStart }),
     }),
 
-  createRun: (assignmentId: string, mode = "multi_agent") =>
-    request<RunSummary>(`/assignments/${assignmentId}/runs?mode=${mode}`, { method: "POST" }),
+  /** `onlyUngraded` queues jobs for submissions no run has scored; false re-grades everything (PRD §11). */
+  createRun: (assignmentId: string, mode = "multi_agent", onlyUngraded = false) =>
+    request<RunSummary>(`/assignments/${assignmentId}/runs?mode=${mode}&only_ungraded=${onlyUngraded}`, {
+      method: "POST",
+    }),
 
   processRun: (runId: string, limit: number, signal?: AbortSignal) =>
     request<RunSummary>(`/runs/${runId}/process?limit=${limit}`, { method: "POST", signal }),
