@@ -121,6 +121,16 @@
   * {
     @apply border-border outline-ring/50;
   }
+  /* Preflight leaves buttons on the default cursor, and a raw <button> is not the only clickable
+     thing that is not a link. The pointer is what says "this does something", and a disabled control
+     must say the opposite, so both rules live here for every button in the app. */
+  button:not(:disabled),
+  [role="button"]:not([aria-disabled="true"]) {
+    cursor: pointer;
+  }
+  button:disabled {
+    cursor: not-allowed;
+  }
   body {
     @apply bg-background text-foreground;
   }

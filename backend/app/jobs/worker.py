@@ -16,6 +16,7 @@ import sys
 from contextlib import contextmanager
 from uuid import UUID
 
+import psycopg
 from psycopg.rows import dict_row
 
 from app import db
@@ -31,6 +32,10 @@ MAX_ATTEMPTS = 3
 # Jobs claimed per pass. The graph call takes seconds and no transaction is held across it, so this
 # bounds only how much of a large batch one call picks up.
 BATCH = 25
+
+#: The Pydantic types the graph writes into its state, and therefore into the checkpoints. LangGraph's
+#: serde needs them named to keep deserialising them across an upgrade; see `_checkpointer`.
+CHECKPOINT_STATE_TYPES = ("CognitiveResult", "MetacognitiveResult", "SynthesisResult", "EvidenceSpan")
 
 
 def _requeue_stale(conn, *, owner_id: UUID, run_id: UUID) -> None:
@@ -149,11 +154,29 @@ def _checkpointer():
     transition, so a connection per submission would add a connect to each of the two dozen jobs a pass
     can claim. Missing checkpoint tables are a loud failure — `scripts/setup_checkpointer.py` is part of
     setting up a database, and silently running without checkpointing would hide that.
+
+    The serde allows exactly the Pydantic types the graph puts in its state. Without that, LangGraph falls
+    back to a permissive default: it warned on every one of them while resuming and says a future version
+    will refuse to deserialise them at all (seen live, 2026-10-16). Naming them here means an upgrade
+    cannot quietly break every resumable run.
     """
     from langgraph.checkpoint.postgres import PostgresSaver
+    from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
 
-    with PostgresSaver.from_conn_string(get_settings().database_url) as saver:
-        yield saver
+    with psycopg.connect(
+        get_settings().database_url,
+        autocommit=True,
+        prepare_threshold=0,
+        row_factory=dict_row,
+    ) as conn:
+        yield PostgresSaver(
+            conn,
+            serde=JsonPlusSerializer(
+                allowed_msgpack_modules=[
+                    ("app.agents.models", name) for name in CHECKPOINT_STATE_TYPES
+                ]
+            ),
+        )
 
 
 def _run_one(owner_id: UUID, job: dict, summary: dict, checkpointer=None) -> None:
@@ -204,17 +227,40 @@ def process_run(owner_id: UUID, run_id: UUID, limit: int | None = None) -> dict:
         if jobs:
             # FR-13 keeps the run's own timestamps, and nobody wrote `started_at` before this. It marks
             # the first claim rather than the creation of the run, so a run left queued overnight says
-            # when it actually began; the `is null` guard keeps a resumed pass from moving the moment.
+            # when it actually began; `coalesce` keeps a resumed pass from moving the moment. The status
+            # moves with it: a run reading `queued` while a job is being graded is a status that lies to
+            # the screen watching it (seen live, 2026-10-16), and `status = 'queued'` keeps a cancelled
+            # run cancelled.
             conn.execute(
-                "update runs set started_at = now() "
-                "where id = %s and owner_id = %s and started_at is null",
+                "update runs set status = 'running', "
+                "started_at = coalesce(started_at, now()) "
+                "where id = %s and owner_id = %s and status = 'queued'",
                 (run_id, owner_id),
             )
     summary["claimed"] = len(jobs)
     with _checkpointer() as saver:
         for job in jobs:
             _run_one(owner_id, job, summary, checkpointer=saver)
+    _settle_run(owner_id, run_id)
     return summary
+
+
+def _settle_run(owner_id: UUID, run_id: UUID) -> None:
+    """A run with nothing queued or running is finished — including when the command line drove it.
+
+    The API endpoint computed this for its own responses, so a run processed from a terminal said
+    `running` for as long as nobody called the API again. `status = 'running'` in the predicate keeps a
+    cancelled run cancelled, which is the whole point of cancelling it.
+    """
+    with db.tenant_tx(owner_id) as conn, conn.cursor() as cur:
+        cur.execute(
+            "update runs set status = 'done', finished_at = coalesce(finished_at, now()) "
+            "where id = %s and owner_id = %s and status = 'running' "
+            "and not exists ("
+            "  select 1 from jobs where jobs.run_id = runs.id and jobs.status in ('queued', 'running')"
+            ")",
+            (run_id, owner_id),
+        )
 
 
 def _owner_id(email: str) -> UUID:

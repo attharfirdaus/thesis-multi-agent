@@ -35,6 +35,9 @@ const ACCEPTED_FILES = ".pdf,.docx,.txt,.zip";
  */
 const IN_FLIGHT_POLL_MS = 3000;
 
+/** A run in one of these states is over; a leftover counter on it is history, not work to do. */
+const TERMINAL_RUN_STATUS = ["done", "failed", "cancelled"];
+
 /** Jobs the queue still owns. A `running` job is already claimed, so it must not be started again. */
 const pendingJobs = (jobs: RunSummary["jobs"]) => (jobs.queued ?? 0) + (jobs.running ?? 0);
 
@@ -202,7 +205,10 @@ export default function TugasPage() {
   const liveRuns = detail
     ? [...(run ? [run] : []), ...detail.runs.filter((item) => item.id !== run?.id)]
     : [];
-  const unfinishedRunId = liveRuns.find((item) => pendingJobs(item.jobs) > 0)?.id ?? null;
+  const unfinishedRunId =
+    liveRuns.find(
+      (item) => !TERMINAL_RUN_STATUS.includes(item.status) && pendingJobs(item.jobs) > 0,
+    )?.id ?? null;
   const inFlightNames = (run?.in_flight ?? []).map((item) => item.pseudonym);
   // Cancelling stops the run this page is working on; only then the one still holding queued jobs.
   const cancelTargetId = drivenRunId ?? unfinishedRunId;
@@ -263,10 +269,15 @@ export default function TugasPage() {
     const targetId = drivenRunId ?? unfinishedRunId;
     if (targetId === null || cancelling.current) return;
     const grading = (run?.in_flight ?? []).map((item) => item.pseudonym);
-    const warning =
+    // The server finishes whatever it has already claimed, whether or not this page managed to name it.
+    const stillFinishing = calling || grading.length > 0;
+    const finishingClause =
       grading.length > 0
-        ? `Batalkan penilaian? Kiriman yang masih menunggu tidak akan dinilai. ${grading.join(", ")} sedang dinilai dan tetap diselesaikan.`
-        : "Batalkan penilaian? Kiriman yang masih menunggu tidak akan dinilai.";
+        ? ` ${grading.join(", ")} sedang dinilai dan tetap diselesaikan.`
+        : " Kiriman yang sedang dinilai tetap diselesaikan.";
+    const warning = `Batalkan penilaian? Kiriman yang masih menunggu tidak akan dinilai.${
+      stillFinishing ? finishingClause : ""
+    }`;
     if (!window.confirm(warning)) return;
 
     cancelling.current = true;
@@ -281,9 +292,7 @@ export default function TugasPage() {
       const jobs = jobTotals(cancelled.jobs);
       setNote(
         `Penilaian dihentikan: ${jobs.done} selesai, ${jobs.cancelled} dibatalkan.` +
-          (grading.length > 0
-            ? ` ${grading.join(", ")} tetap diselesaikan dan nilainya tetap tersimpan.`
-            : ""),
+          (stillFinishing ? finishingClause : ""),
       );
       await load();
     } catch (err) {

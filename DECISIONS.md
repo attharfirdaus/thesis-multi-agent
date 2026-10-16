@@ -31,7 +31,30 @@ The owner's list, verbatim, and what each one turned out to require.
   run stays cancelled through the next pass, so the control cannot be undone by the very work it stopped.
 
 Verified: 124 backend tests (three new: the in-flight report, the not-resurrected cancelled run, and the
-409 on a finished run), ruff and mypy clean, migration applied to the app's database.
+409 on a finished run), ruff and mypy clean, migration applied to the app's database. Then verified against
+the running app with a throwaway account, because the tests cannot see the queue from outside:
+
+| What was checked live | Result |
+| --- | --- |
+| `in_flight` while grading | `jobs: {running: 1}`, `in_flight: ['S-c37c51e5']` — the submission is named |
+| cancel mid-flight | `status: cancelled`, `jobs: {running: 1}`, in-flight submission still named |
+| cancel again | 409 |
+| after the in-flight submission finished | run stayed `cancelled`, job `done`, 5 scores and feedback stored — the documented "one graded submission, not a resumed run" |
+| cancel a finished run | 409, and the run stayed `done` |
+
+**Two more defects that only the live pass could show**, both fixed in the same commit:
+
+- **The run's status lagged its own work.** While a pass was grading, `GET /runs/{id}` still answered
+  `queued` — the status was only written at the end of the request — and a run driven from the command line
+  stayed `running` for as long as nobody called the API again. Both now settle through the worker: the run
+  moves to `running` when the first job is claimed and to `done` when nothing is left, which is what the
+  screen and the thesis read. Verified live through both paths.
+- **LangGraph's checkpoint serde did not know our state types.** It warned on every `CognitiveResult`,
+  `MetacognitiveResult`, `SynthesisResult` and `EvidenceSpan` while resuming and states that a future
+  version will refuse to deserialise them at all — which would break every resumable run on an upgrade,
+  silently until someone needed to resume. The saver now names them explicitly
+  (`CHECKPOINT_STATE_TYPES`) instead of relying on the permissive default. Verified live: zero warnings in a
+  full pass afterwards.
 
 ## 2026-10-16 — First real use: four defects found and fixed
 

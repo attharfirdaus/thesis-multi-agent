@@ -345,6 +345,11 @@ def test_a_run_records_when_it_started_and_keeps_that_moment(monkeypatch):
             "select started_at from runs where id = %s", (lecturer["run"],)
         ).fetchone()[0]
     assert first is not None
+    with db.tenant_tx(lecturer["owner"]) as conn:
+        status = conn.execute(
+            "select status from runs where id = %s", (lecturer["run"],)
+        ).fetchone()[0]
+    assert status == "done", "a pass that finished every job has finished the run, whoever drove it"
 
     # A second pass finds nothing left to claim: it must not move the moment work began.
     worker.process_run(lecturer["owner"], lecturer["run"])
