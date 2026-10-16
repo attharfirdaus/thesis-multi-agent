@@ -69,6 +69,14 @@ from a misconfigured key before `.env` was fixed, and cleaned up by hand. Not th
 tonight's change and needs a decision about per-file atomicity (a savepoint per file, most likely), not a
 quick patch bolted onto this one.
 
+**Process note for future throwaway-account cleanups (not a product decision):** deleting a `users` row
+cascades everything in Postgres, but `backend/data/identities.db` is a different engine with no foreign key
+to it — a throwaway lecturer's names outlive the deleted account unless they are cleared there too. Caught
+live: a subagent's verification left one orphaned row after deleting its throwaway user directly; deleted by
+hand (`sqlite3 backend/data/identities.db "delete from student_identities where owner_id = '...'"`). The
+testing pattern this project has used throughout now needs that second step whenever a submission with a
+captured name is involved, not only the `users` delete.
+
 ## 2026-10-16 (deep night) — FR-15 and FR-16 built, two defects found and fixed in live verification
 
 Built both phase-6 features on top of the plan recorded in the entry below (the same night): the single-agent
