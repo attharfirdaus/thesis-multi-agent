@@ -166,6 +166,54 @@ def test_detail_of_an_unscored_submission_is_not_an_error(seeded):
     assert body["feedback"] is None
 
 
+def test_the_results_payload_previews_exactly_what_the_export_writes(seeded):
+    """The screen previews the file, so both must read the same two things.
+
+    The results payload used to send the *generated* feedback while the export wrote the lecturer's edit,
+    and it carried no review note at all — a preview built on it would have promised something the file did
+    not contain. This asserts the preview and the file agree, field by field.
+    """
+    client = seeded["client"]
+    run_id = _run_batch(seeded)
+    score_id = _score_id(seeded["user"], run_id, "cognitive")
+    client.post(
+        f"/system_scores/{score_id}/review",
+        json={"action": "override", "new_level": "C5", "reason": "Bukti kuat."},
+        headers=_csrf(client),
+    )
+    client.patch(
+        f"/submissions/{seeded['submission']}/feedback",
+        json={"edited_text": "Versi dosen."},
+        headers=_csrf(client),
+    )
+
+    submission = client.get(f"/runs/{run_id}/results").json()["submissions"][0]
+    cognitive = next(s for s in submission["scores"] if s["dimension"] == "cognitive")
+    assert cognitive["review"] is not None
+    assert (
+        cognitive["review"]["action"],
+        cognitive["review"]["new_level"],
+        cognitive["review"]["reason"],
+    ) == ("override", "C5", "Bukti kuat.")
+    assert all(
+        score["review"] is None
+        for score in submission["scores"]
+        if score["dimension"] == "metacognitive"
+    ), "a score nobody reviewed carries no note"
+
+    assert submission["feedback_text"] == "Versi dosen."
+    assert submission["feedback_edited"] is True
+
+    rows = list(
+        csv.reader(io.StringIO(client.get(f"/runs/{run_id}/export.csv").content.decode("utf-8-sig")))
+    )
+    header = rows[0]
+    row = next(r for r in rows[1:] if r[header.index("dimension")] == "cognitive")
+    assert row[header.index("feedback_text")] == submission["feedback_text"]
+    assert row[header.index("review_action")] == cognitive["review"]["action"]
+    assert row[header.index("review_reason")] == cognitive["review"]["reason"]
+
+
 def test_a_rubric_without_level_names_reports_none_rather_than_inventing_them(seeded):
     """A rubric row seeded before names existed carries none.
 

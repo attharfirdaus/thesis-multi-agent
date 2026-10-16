@@ -76,12 +76,26 @@ class EvidenceOut(BaseModel):
     end_offset: int
 
 
+class ReviewOut(BaseModel):
+    system_score_id: UUID
+    action: Literal["accept", "override"]
+    new_level: str | None = None
+    reason: str | None = None
+    reviewed_at: dt.datetime
+
+
 class ScoreOut(BaseModel):
     dimension: Literal["cognitive", "metacognitive"]
     indicator: str | None = None
+    #: The score's own id, so a review note can be attached to the score it judges. Optional because the
+    #: results payload builds a score for a submission a run never reached as well.
+    id: UUID | None = None
     level: str
     rationale: str | None = None
     evidence: list[EvidenceOut] = Field(default_factory=list)
+    #: The lecturer's newest review of this score, or None when nobody has judged it. The dialog needs the
+    #: reason next to the grade it overrides, which is also how the export pairs them.
+    review: ReviewOut | None = None
 
 
 class SubmissionResultOut(BaseModel):
@@ -89,7 +103,10 @@ class SubmissionResultOut(BaseModel):
     pseudonym: str
     review_flags: list[str] = Field(default_factory=list)
     scores: list[ScoreOut] = Field(default_factory=list)
+    #: What the export will write: the lecturer's edit when there is one, otherwise the generated text.
+    #: The results screen previews the export, so it has to read the same expression the export does.
     feedback_text: str | None = None
+    feedback_edited: bool = False
 
 
 class RunResultsOut(BaseModel):
@@ -195,14 +212,6 @@ class SubmissionScoreOut(BaseModel):
     level: str
     rationale: str | None = None
     evidence: list[EvidenceOut] = Field(default_factory=list)
-
-
-class ReviewOut(BaseModel):
-    system_score_id: UUID
-    action: Literal["accept", "override"]
-    new_level: str | None = None
-    reason: str | None = None
-    reviewed_at: dt.datetime
 
 
 class ReviewIn(BaseModel):

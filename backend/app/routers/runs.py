@@ -22,6 +22,7 @@ from app.routers.auth import CurrentUser
 from app.schemas import (
     EvidenceOut,
     InFlightOut,
+    ReviewOut,
     RunOut,
     RunResultsOut,
     ScoreOut,
@@ -264,12 +265,23 @@ def get_results(run_id: uuid.UUID, user: CurrentUser) -> RunResultsOut:
         rows = cur.execute(
             "select s.id as submission_id, s.pseudonym, s.review_flags, "
             "       sc.dimension, sc.indicator, sc.level, sc.rationale, sc.id as score_id, "
-            "       e.quote, e.start_offset, e.end_offset, f.generated_text "
+            "       e.quote, e.start_offset, e.end_offset, "
+            "       coalesce(f.edited_text, f.generated_text) as feedback_text, "
+            "       f.edited_text is not null as feedback_edited, "
+            "       rv.action as review_action, rv.new_level as review_new_level, "
+            "       rv.reason as review_reason, rv.reviewed_at as review_reviewed_at "
             "from submissions s "
             "join jobs j on j.submission_id = s.id and j.run_id = %s "
             "left join system_scores sc on sc.submission_id = s.id and sc.run_id = %s "
             "left join evidence e on e.system_score_id = sc.id "
             "left join feedback f on f.submission_id = s.id "
+            # The newest review per score, the same rule the detail view and the export use, so the preview
+            # cannot disagree with the file it previews.
+            "left join lateral ("
+            "  select lr.action, lr.new_level, lr.reason, lr.reviewed_at "
+            "  from lecturer_reviews lr where lr.system_score_id = sc.id "
+            "  order by lr.reviewed_at desc limit 1"
+            ") rv on true "
             "order by s.pseudonym, sc.dimension, sc.indicator",
             (run_id, run_id),
         ).fetchall()
@@ -283,7 +295,8 @@ def get_results(run_id: uuid.UUID, user: CurrentUser) -> RunResultsOut:
                 pseudonym=row["pseudonym"],
                 review_flags=list(row["review_flags"] or []),
                 scores=[],
-                feedback_text=row["generated_text"],
+                feedback_text=row["feedback_text"],
+                feedback_edited=row["feedback_edited"],
             ),
         )
         if row["dimension"] is None:
@@ -298,11 +311,21 @@ def get_results(run_id: uuid.UUID, user: CurrentUser) -> RunResultsOut:
         )
         if score is None:
             score = ScoreOut(
+                id=row["score_id"],
                 dimension=row["dimension"],
                 indicator=row["indicator"],
                 level=row["level"],
                 rationale=row["rationale"],
                 evidence=[],
+                review=None
+                if row["review_action"] is None
+                else ReviewOut(
+                    system_score_id=row["score_id"],
+                    action=row["review_action"],
+                    new_level=row["review_new_level"],
+                    reason=row["review_reason"],
+                    reviewed_at=row["review_reviewed_at"],
+                ),
             )
             entry.scores.append(score)
         if row["quote"] is not None:
