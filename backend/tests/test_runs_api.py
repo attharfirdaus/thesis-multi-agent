@@ -11,7 +11,7 @@ quote out of the stored text", because that is what makes a score traceable to t
 The `seeded` batch itself lives in `conftest.py`: phase 5's lecturer-UI tests score the same way.
 """
 
-from conftest import INDICATORS, QUOTE_COGNITIVE, StubClient
+from conftest import INDICATORS, QUOTE_COGNITIVE, StubClient, build_submission_docx
 
 from app import db
 from app.agents.models import CognitiveResult, MetacognitiveResult
@@ -138,6 +138,83 @@ class _CognitiveFails:
         if schema is CognitiveResult:
             raise RuntimeError("provider unreachable")
         return self.inner.complete_json(system=system, user=user, schema=schema)
+
+
+def _score_the_batch(seeded) -> str:
+    """Create a run over the assignment and process it, so its submissions carry scores."""
+    client, csrf = seeded["client"], seeded["csrf"]
+    run_id = client.post(
+        f"/assignments/{seeded['assignment']}/runs", headers={"X-CSRF-Token": csrf}
+    ).json()["id"]
+    client.post(f"/runs/{run_id}/process?limit=10", headers={"X-CSRF-Token": csrf})
+    return run_id
+
+
+def _upload_one_more(client, csrf: str, assignment: str) -> str:
+    """Upload a second submission through the ingest API and return its id."""
+    response = client.post(
+        f"/assignments/{assignment}/submissions",
+        files=[
+            (
+                "files",
+                (
+                    "Tugas 2_Budi Santoso.docx",
+                    build_submission_docx(),
+                    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                ),
+            )
+        ],
+        headers={"X-CSRF-Token": csrf},
+    )
+    assert response.status_code == 201, response.text
+    return response.json()["files"][0]["submission_id"]
+
+
+def test_only_ungraded_leaves_the_graded_submissions_alone(seeded):
+    """The lecturer's "grade what is new" choice.
+
+    A new batch of uploads must not re-grade everything already marked: that is provider quota and time
+    spent on scores that already exist. Measured at ~15 s per submission, so the difference is real.
+    """
+    client, csrf = seeded["client"], seeded["csrf"]
+    _score_the_batch(seeded)  # the seeded submission now has scores
+
+    with db.tenant_tx(seeded["user"]) as conn:
+        assert conn.execute("select count(*) from system_scores").fetchone()[0] > 0
+
+    # The default is unchanged: it still covers every submission, which PRD §11's variance measurement
+    # needs. Only the explicit choice skips the graded ones.
+    everything = client.post(
+        f"/assignments/{seeded['assignment']}/runs", headers={"X-CSRF-Token": csrf}
+    ).json()
+    assert everything["jobs"] == {"queued": 1}
+
+    refused = client.post(
+        f"/assignments/{seeded['assignment']}/runs?only_ungraded=true", headers={"X-CSRF-Token": csrf}
+    )
+    assert refused.status_code == 409, refused.text
+    assert refused.json()["detail"] == "Every submission in this assignment has already been graded."
+
+
+def test_only_ungraded_queues_the_submissions_that_have_no_scores(seeded):
+    client, csrf = seeded["client"], seeded["csrf"]
+    _score_the_batch(seeded)  # scores the seeded submission
+    extra = _upload_one_more(client, csrf, seeded["assignment"])
+
+    run = client.post(
+        f"/assignments/{seeded['assignment']}/runs?only_ungraded=true", headers={"X-CSRF-Token": csrf}
+    )
+    assert run.status_code == 201, run.text
+    assert run.json()["jobs"] == {"queued": 1}, "only the new submission is queued"
+
+    with db.tenant_tx(seeded["user"]) as conn:
+        queued = conn.execute(
+            "select submission_id from jobs where run_id = %s", (run.json()["id"],)
+        ).fetchall()
+    assert [str(row[0]) for row in queued] == [str(extra)]
+
+    detail = client.get(f"/assignments/{seeded['assignment']}").json()
+    assert (detail["submission_count"], detail["graded_count"]) == (2, 1)
 
 
 def test_run_status_reports_job_counts(seeded):

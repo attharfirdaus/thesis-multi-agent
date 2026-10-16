@@ -145,6 +145,10 @@ class AssignmentSummaryOut(BaseModel):
     prompt_text: str
     created_at: dt.datetime
     submission_count: int
+    #: How many of those submissions any run has already scored. The lecturer's "grade what is new"
+    #: choice needs it: without it the screen cannot say how much work a run would actually do, nor why
+    #: nothing would happen.
+    graded_count: int = 0
     latest_run: LatestRunOut | None = None
 
 

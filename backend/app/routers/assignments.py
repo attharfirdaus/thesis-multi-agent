@@ -62,6 +62,9 @@ def list_assignments(user: CurrentUser) -> list[AssignmentSummaryOut]:
         rows = cur.execute(
             "select a.id, a.title, a.course, a.prompt_text, a.created_at, "
             "       (select count(*) from submissions s where s.assignment_id = a.id) as submission_count, "
+            "       (select count(*) from submissions s where s.assignment_id = a.id "
+            "        and exists (select 1 from system_scores sc where sc.submission_id = s.id)) "
+            "        as graded_count, "
             "       latest.id as run_id, latest.status as run_status "
             "from assignments a "
             "left join lateral (select id, status from runs where assignment_id = a.id "
@@ -78,6 +81,7 @@ def list_assignments(user: CurrentUser) -> list[AssignmentSummaryOut]:
             prompt_text=row["prompt_text"],
             created_at=row["created_at"],
             submission_count=row["submission_count"],
+            graded_count=row["graded_count"],
             latest_run=None
             if row["run_id"] is None
             else LatestRunOut(
@@ -124,7 +128,10 @@ def get_assignment(assignment_id: uuid.UUID, user: CurrentUser) -> AssignmentDet
     with db.tenant_tx(user.id) as conn, conn.cursor(row_factory=dict_row) as cur:
         assignment = cur.execute(
             "select a.id, a.title, a.course, a.prompt_text, a.created_at, "
-            "       (select count(*) from submissions s where s.assignment_id = a.id) as submission_count "
+            "       (select count(*) from submissions s where s.assignment_id = a.id) as submission_count, "
+            "       (select count(*) from submissions s where s.assignment_id = a.id "
+            "        and exists (select 1 from system_scores sc where sc.submission_id = s.id)) "
+            "        as graded_count "
             "from assignments a where a.id = %s",
             (assignment_id,),
         ).fetchone()

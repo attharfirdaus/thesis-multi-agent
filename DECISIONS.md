@@ -7,6 +7,26 @@ Every provider/model/library fact cited in this project carries a source URL and
 
 No model or provider decision remains open. The hosting decisions (O-2, O-3, O-5) were re-taken twice — on 2026-10-07 (VM dropped) and again on 2026-10-14 (Cloud Run dropped for a card-free host) — see the newest entries; the older ones are kept as the record of what was chosen and why it changed. What is still open lives in PRD section 14 — the supervisors' metacognitive rubric, institutional ethics clearance, the validation-subset size, the SUS instrument, the feedback-text format, and how the two synthetic calibration examples are validated. The few-shot calibration itself is settled: Atthar supplied it on 2026-10-15.
 
+## 2026-10-16 (evening) — Grading only what is new, as a choice rather than a default
+
+Atthar asked for the app to grade only submissions it has not graded yet. Delivered as
+`POST /assignments/{id}/runs?only_ungraded=true`, with the existing behaviour (every submission) kept as the
+default.
+
+- **Why not make it the default.** PRD §11 measures run-to-run variance by scoring the same submission 3–5
+  times and reporting mean ± SD. A default that skips anything already scored would silently remove the
+  mechanism the thesis needs. So the screen offers the choice, defaulting to "only what is new" because that
+  is what he asked for, with "re-grade everything" next to it — and the wording of the confirmation follows
+  the choice instead of warning about replacing results that a new-only run will not touch.
+- **`graded_count` on the assignment payload** so the screen can say how much work a run would do
+  ("1 kiriman akan dinilai, 3 sudah dinilai") and disable the control with a sentence when nothing is left,
+  rather than letting the lecturer press it and read a 409. The 409 stays for the race.
+- **Submissions scored but flagged for review are not "new"**, so the new-only choice skips them; the screen
+  says so next to the choice, because re-grading is how a lecturer acts on that flag.
+- Verification: 131 backend tests (two new — the new-only queue holding exactly the unscored submission and
+  the 409 when nothing is left; and the default still covering everything, which the two-run test in
+  `test_lecturer_api` already exercised). Ignoring the parameter fails both new tests.
+
 ## 2026-10-16 (still later) — A "Perlu Ditinjau" badge that outlived its run
 
 Atthar asked why a submission still showed "Penilaian tingkat kognitif gagal — coba jalankan ulang." The

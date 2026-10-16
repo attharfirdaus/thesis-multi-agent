@@ -103,8 +103,15 @@ def create_run(
     request: Request,
     user: CurrentUser,
     mode: Annotated[str, Query(pattern="^(multi_agent|single_agent)$")] = "multi_agent",
+    only_ungraded: Annotated[bool, Query()] = False,
 ) -> RunOut:
-    """Snapshot the configuration and queue one job per submission (PRD §10 `Run`)."""
+    """Snapshot the configuration and queue one job per submission (PRD §10 `Run`).
+
+    `only_ungraded=true` queues only the submissions no run has scored yet, which is what a lecturer
+    uploading a new batch wants: the ones already marked are left alone. The default stays "every
+    submission" because PRD §11 measures run-to-run variance by scoring the same text repeatedly, so
+    re-grading has to remain reachable — it is a choice, not an accident.
+    """
     require_csrf(request)
     with db.tenant_tx(user.id) as conn, conn.cursor(row_factory=dict_row) as cur:
         assignment = cur.execute(
@@ -117,14 +124,22 @@ def create_run(
         submissions = [
             row["id"]
             for row in cur.execute(
-                "select id from submissions where assignment_id = %s order by created_at",
+                # Two plain queries rather than one with a conditional predicate: which submissions a
+                # run covers is the thing the lecturer just chose, and it should be readable here.
+                "select s.id from submissions s where s.assignment_id = %s "
+                "and not exists (select 1 from system_scores sc where sc.submission_id = s.id) "
+                "order by s.created_at"
+                if only_ungraded
+                else "select id from submissions where assignment_id = %s order by created_at",
                 (assignment_id,),
             ).fetchall()
         ]
         if not submissions:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
-                detail="This assignment has no submissions to evaluate.",
+                detail="Every submission in this assignment has already been graded."
+                if only_ungraded
+                else "This assignment has no submissions to evaluate.",
             )
 
         prompt_versions = cur.execute(
