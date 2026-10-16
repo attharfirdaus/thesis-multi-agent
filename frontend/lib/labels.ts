@@ -62,3 +62,11 @@ export function warningSentence(warning: string): string {
   }
   return "Berkas diproses dengan catatan yang belum dapat dijelaskan otomatis.";
 }
+
+/**
+ * One statement per distinct caveat. The backend has stored two phrasings of the same fact (the
+ * segmenter's and the ingest router's), so the same sentence could otherwise be read twice in one cell.
+ */
+export function warningSentences(warnings: string[]): string[] {
+  return [...new Set(warnings.map(warningSentence))];
+}

@@ -14,6 +14,7 @@ import openpyxl
 from conftest import INDICATORS, LEVELS, QUOTE_COGNITIVE
 
 from app import db
+from app.jobs.queue import claim_jobs
 from app.routers.export import COLUMNS
 
 OTHER_LECTURER = {
@@ -47,6 +48,25 @@ def _score_id(user, run_id: str, dimension: str = "cognitive") -> uuid.UUID:
             "select id from system_scores where run_id = %s and dimension = %s",
             (run_id, dimension),
         ).fetchone()[0]
+
+
+def _rows_for(conn, submission_id: uuid.UUID) -> dict[str, int]:
+    """How many rows still exist for this submission, table by table."""
+    counts: dict[str, int] = {}
+    for label, query in (
+        ("system_scores", "select count(*) from system_scores where submission_id = %s"),
+        ("agent_traces", "select count(*) from agent_traces where submission_id = %s"),
+        ("feedback", "select count(*) from feedback where submission_id = %s"),
+        ("jobs", "select count(*) from jobs where submission_id = %s"),
+        ("student_identities", "select count(*) from student_identities where submission_id = %s"),
+        (
+            "evidence",
+            "select count(*) from evidence e join system_scores s on s.id = e.system_score_id "
+            "where s.submission_id = %s",
+        ),
+    ):
+        counts[label] = conn.execute(query, (submission_id,)).fetchone()[0]
+    return counts
 
 
 def test_assignment_list_reports_counts_and_latest_run(seeded):
@@ -324,6 +344,48 @@ def test_export_csv_and_xlsx(seeded):
     assert book.sheetnames == ["Scores"]
     assert [cell.value for cell in book["Scores"][1]] == EXPECTED_HEADER
     assert book["Scores"].max_row - 1 == expected_rows
+
+
+def test_deleting_a_submission_takes_everything_derived_from_it(seeded):
+    """One delete, because the rows a lecturer can no longer see are still rows about a student."""
+    client, csrf = seeded["client"], seeded["csrf"]
+    run_id = _run_batch(seeded)
+    submission = seeded["submission"]
+    with db.tenant_tx(seeded["user"]) as conn:
+        counts = _rows_for(conn, submission)
+    assert counts["system_scores"] > 0 and counts["agent_traces"] > 0 and counts["jobs"] > 0
+
+    response = client.delete(f"/submissions/{submission}", headers={"X-CSRF-Token": csrf})
+    assert response.status_code == 204, response.text
+
+    assert client.get(f"/submissions/{submission}").status_code == 404
+    with db.tenant_tx(seeded["user"]) as conn:
+        assert _rows_for(conn, submission) == {
+            "system_scores": 0,
+            "evidence": 0,
+            "agent_traces": 0,
+            "feedback": 0,
+            "jobs": 0,
+            "student_identities": 0,
+        }
+    assignment = client.get(f"/assignments/{seeded['assignment']}").json()
+    assert assignment["submissions"] == []
+    assert client.get(f"/runs/{run_id}/results").json()["submissions"] == []
+
+
+def test_a_submission_being_graded_cannot_be_deleted_under_the_worker(seeded):
+    """The worker holds that submission's text: deleting the row mid-flight would make it fail to store a
+    result and take the whole pass down with it."""
+    client, csrf = seeded["client"], seeded["csrf"]
+    run_id = client.post(
+        f"/assignments/{seeded['assignment']}/runs", headers={"X-CSRF-Token": csrf}
+    ).json()["id"]
+    with db.tenant_tx(seeded["user"]) as conn:
+        assert len(claim_jobs(conn, owner_id=seeded["user"], run_id=run_id, limit=10)) == 1
+
+    response = client.delete(f"/submissions/{seeded['submission']}", headers={"X-CSRF-Token": csrf})
+    assert response.status_code == 409, response.text
+    assert client.get(f"/submissions/{seeded['submission']}").status_code == 200
 
 
 def test_another_lecturer_reaches_nothing(seeded):

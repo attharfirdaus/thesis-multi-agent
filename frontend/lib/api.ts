@@ -51,6 +51,8 @@ const MESSAGES_ID: Record<string, string> = {
   "No feedback has been generated for this submission yet.":
     "Umpan balik belum tersedia untuk kiriman ini.",
   "The student's analysis cannot be empty.": "Analisis mahasiswa tidak boleh kosong.",
+  "This submission is still queued or being graded; stop the run first.":
+    "Kiriman ini masih menunggu atau sedang dinilai. Hentikan penilaian terlebih dahulu.",
 };
 
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
@@ -227,6 +229,8 @@ export const api = {
   },
 
   getSubmission: (id: string) => request<SubmissionDetail>(`/submissions/${id}`),
+
+  deleteSubmission: (id: string) => request<void>(`/submissions/${id}`, { method: "DELETE" }),
 
   patchSegmentation: (id: string, analysisStart: number) =>
     request<unknown>(`/submissions/${id}/segmentation`, {

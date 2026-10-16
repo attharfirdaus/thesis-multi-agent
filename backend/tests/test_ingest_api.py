@@ -14,6 +14,7 @@ import pytest
 from psycopg.rows import dict_row
 
 from app import db
+from app.ingest.segment import NO_AI_WARNING
 
 NAME = "Budi Santoso"
 NIM = "28123456"
@@ -111,6 +112,25 @@ def test_import_removes_identifiers_and_keeps_the_mapping(lecturer):
     assert {e["cls"] for e in events} >= {"name_label", "student_id", "email"}
     # No row anywhere may hold the removed value.
     assert all(NAME not in str(dict(e)) for e in events)
+
+
+def test_a_document_without_ai_output_records_that_once(lecturer):
+    """One fact, one warning.
+
+    The router used to append its own phrasing of the fact the segmenter had already reported, so the
+    lecturer's screen showed the same sentence twice (seen live, 2026-10-16).
+    """
+    document = docx.Document()
+    document.add_paragraph("Analisis saya tentang manajemen risiko, tanpa keluaran AI sama sekali.")
+    buffer = io.BytesIO()
+    document.save(buffer)
+
+    entry = upload(
+        lecturer, ("files", ("Tugas tanpa AI.docx", buffer.getvalue(), DOCX_MIME))
+    ).json()["files"][0]
+
+    assert entry["has_ai_output"] is False
+    assert [warning for warning in entry["warnings"] if "AI" in warning] == [NO_AI_WARNING], entry
 
 
 def test_one_bad_file_does_not_fail_the_batch(lecturer):

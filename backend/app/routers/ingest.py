@@ -57,10 +57,10 @@ def _store(cur, owner_id: uuid.UUID, assignment_id: uuid.UUID, doc: ExtractedDoc
     warnings = [*doc.warnings, *result.warnings]
     if not analysis.text.strip() and not ai.text.strip():
         warnings.append("No extractable text was found in this file.")
-    if result.method == "none":
-        warnings.append(
-            "No AI-output segment was detected; the whole document was treated as the student's analysis."
-        )
+    # The segmenter already reports the no-AI-output case (`segment.NO_AI_WARNING`) because it is the layer
+    # that knows how the boundary was decided. The router used to append a second phrasing of the same fact,
+    # which is why the lecturer's screen showed that sentence twice (seen live, 2026-10-16): one fact, one
+    # warning.
 
     pseudonym = f"S-{uuid.uuid4().hex[:8]}"
     row = cur.execute(
@@ -162,6 +162,37 @@ def list_submissions(assignment_id: uuid.UUID, user: CurrentUser) -> list[Submis
             (assignment_id,),
         ).fetchall()
     return [_as_out(row) for row in rows]
+
+
+@router.delete("/submissions/{submission_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_submission(submission_id: uuid.UUID, request: Request, user: CurrentUser) -> None:
+    """Remove a submission and everything derived from it.
+
+    One delete, not a cleanup dance: every dependent row — scores, their evidence, agent traces, feedback,
+    queue entries, redaction counts and the pseudonym mapping — cascades from `submissions`, so a
+    half-deleted submission cannot happen. That matters more here than elsewhere: the rows a lecturer cannot
+    see any more are still rows about a student.
+
+    Refused while a job for this submission is queued or running. The worker holds that submission's text
+    and would try to store a result for a row that no longer exists, which fails the whole pass rather than
+    the one submission, and the lecturer would have deleted something the app kept grading.
+    """
+    require_csrf(request)
+    with db.tenant_tx(user.id) as conn, conn.cursor(row_factory=dict_row) as cur:
+        row = cur.execute("select id from submissions where id = %s", (submission_id,)).fetchone()
+        if row is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Submission not found.")
+        busy = cur.execute(
+            "select count(*) as n from jobs "
+            "where submission_id = %s and status in ('queued', 'running')",
+            (submission_id,),
+        ).fetchone()
+        if busy and busy["n"]:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="This submission is still queued or being graded; stop the run first.",
+            )
+        cur.execute("delete from submissions where id = %s", (submission_id,))
 
 
 @router.patch("/submissions/{submission_id}/segmentation", response_model=SubmissionOut)

@@ -7,6 +7,32 @@ Every provider/model/library fact cited in this project carries a source URL and
 
 No model or provider decision remains open. The hosting decisions (O-2, O-3, O-5) were re-taken twice — on 2026-10-07 (VM dropped) and again on 2026-10-14 (Cloud Run dropped for a card-free host) — see the newest entries; the older ones are kept as the record of what was chosen and why it changed. What is still open lives in PRD section 14 — the supervisors' metacognitive rubric, institutional ethics clearance, the validation-subset size, the SUS instrument, the feedback-text format, and how the two synthetic calibration examples are validated. The few-shot calibration itself is settled: Atthar supplied it on 2026-10-15.
 
+## 2026-10-16 (later still) — Deleting a submission, and one fact one warning
+
+**Atthar asked for "a feature to delete student posts"** (submissions). `DELETE /submissions/{id}` answers 204
+and removes the submission and everything derived from it: scores, their evidence, agent traces, feedback,
+queue entries, redaction counts and the pseudonym mapping. All of it cascades from `submissions`, so this is
+one delete rather than a cleanup sequence that can half-finish — and a half-deleted submission is worse here
+than anywhere else, because the rows a lecturer can no longer see are still rows about a student.
+
+- **Refused (409) while a job for that submission is queued or being graded.** The worker holds that
+  submission's text and would try to store a result for a row that no longer exists; the failure would take
+  the whole pass down, not just that submission, and the lecturer would have deleted something the app kept
+  grading. The screen shows the reason and keeps the row.
+- **Deleting an assignment was not built.** He asked for submissions, no requirement covers an assignment
+  delete, and one click that takes a whole class is not a control to invent.
+- Verification: 128 backend tests (three new — the cascade reaching every dependent table and the run's own
+  results view, the 409 while a job is in flight, and the single warning below), each of the two new guards
+  proven to fail when its behaviour is removed.
+
+**And a bug his screenshot showed: the same sentence twice in one cell.** "Bagian keluaran AI tidak
+terdeteksi…" appeared twice for two submissions. Root cause was in the data, not the screen: the segmenter
+reports the no-AI case (`segment.NO_AI_WARNING`) and the ingest router appended its own phrasing of the same
+fact, so two stored strings mapped to one Indonesian sentence. The router no longer adds it — one fact, one
+warning, and the layer that knows how the boundary was decided is the layer that reports it. Rows already
+stored still carry both, so the UI de-duplicates rendered warnings by sentence, the same way it de-duplicates
+flag sentences.
+
 ## 2026-10-16 (later) — Three UI asks from Atthar: transparency, cursors, cancel
 
 The owner's list, verbatim, and what each one turned out to require.

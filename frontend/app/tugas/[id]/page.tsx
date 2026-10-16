@@ -11,8 +11,8 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { api, type AssignmentDetail, type ImportedFile, type RunSummary } from "@/lib/api";
-import { flagSentences, warningSentence } from "@/lib/labels";
+import { api, type AssignmentDetail, type ImportedFile, type RunSummary, type SubmissionSummary } from "@/lib/api";
+import { flagSentences, warningSentences } from "@/lib/labels";
 
 /** Jobs per request: one call must not sit on the whole batch, and the page shows progress between calls. */
 const PROCESS_CHUNK = 2;
@@ -86,6 +86,7 @@ export default function TugasPage() {
   const [elapsed, setElapsed] = useState(0);
   const [drivenRunId, setDrivenRunId] = useState<string | null>(null);
   const [cancellingRun, setCancellingRun] = useState(false);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
   const fileInput = useRef<HTMLInputElement>(null);
   const drivingRun = useRef<string | null>(null);
   const resumedRun = useRef<string | null>(null);
@@ -99,8 +100,11 @@ export default function TugasPage() {
       api.getAssignment(id).then(
         (data) => {
           setDetail(data);
-          // Keep the run being driven on screen; anything else shows the newest run the API reports.
-          setRun((current) => (current?.id === data.latest_run?.id ? current : data.latest_run));
+          // Keep the run being driven on screen, but take the API's counters: deleting a submission
+          // removes its job rows, so the counts on display are not the ones the run started with.
+          setRun((current) =>
+            current?.id === data.latest_run?.id ? { ...current, ...data.latest_run } : data.latest_run,
+          );
         },
         (err: unknown) => setError(err instanceof Error ? err.message : "Gagal memuat tugas."),
       ),
@@ -303,6 +307,30 @@ export default function TugasPage() {
     }
   }
 
+  /** Delete one submission and everything derived from it. Confirmed, because nothing brings it back. */
+  async function onDelete(submission: SubmissionSummary) {
+    if (deletingId !== null) return;
+    const confirmed = window.confirm(
+      `Hapus kiriman ${submission.pseudonym}? Nilai, kutipan bukti, umpan balik, dan tautan ke identitas ` +
+        "mahasiswa ikut terhapus. Tindakan ini tidak dapat dibatalkan.",
+    );
+    if (!confirmed) return;
+
+    setDeletingId(submission.id);
+    setError(null);
+    setNote(null);
+    try {
+      await api.deleteSubmission(submission.id);
+      await load();
+      setNote(`Kiriman ${submission.pseudonym} beserta nilainya sudah dihapus.`);
+    } catch (err) {
+      // A refused delete (the submission is queued or being graded) keeps the row on screen.
+      setError(err instanceof Error ? err.message : "Gagal menghapus kiriman.");
+    } finally {
+      setDeletingId(null);
+    }
+  }
+
   return (
     <AppShell>
       {detail === null ? (
@@ -374,7 +402,7 @@ export default function TugasPage() {
                       {file.status === "failed" ? <span>Berkas ini gagal dibaca.</span> : null}
                       {file.warnings?.length ? (
                         <span className="text-muted-foreground">
-                          {file.warnings.map(warningSentence).join(" ")}
+                          {warningSentences(file.warnings).join(" ")}
                         </span>
                       ) : null}
                       <TechnicalDetail
@@ -544,7 +572,7 @@ export default function TugasPage() {
                           <td className="py-2 text-muted-foreground">
                             {submission.import_warnings?.length ? (
                               <div className="flex flex-col gap-1">
-                                <span>{submission.import_warnings.map(warningSentence).join(" ")}</span>
+                                <span>{warningSentences(submission.import_warnings).join(" ")}</span>
                                 <TechnicalDetail lines={submission.import_warnings} />
                               </div>
                             ) : (
