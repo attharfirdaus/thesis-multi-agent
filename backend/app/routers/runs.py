@@ -16,6 +16,7 @@ from psycopg.rows import dict_row
 
 from app import db
 from app.config import get_settings
+from app.ingest.identity_store import read_many as read_identities
 from app.jobs.queue import enqueue_run
 from app.jobs.worker import process_run
 from app.routers.auth import CurrentUser
@@ -286,6 +287,7 @@ def get_results(run_id: uuid.UUID, user: CurrentUser) -> RunResultsOut:
             (run_id, run_id),
         ).fetchall()
 
+    names = read_identities({row["submission_id"] for row in rows}, user.id)
     submissions: dict[uuid.UUID, SubmissionResultOut] = {}
     for row in rows:
         entry = submissions.setdefault(
@@ -293,6 +295,7 @@ def get_results(run_id: uuid.UUID, user: CurrentUser) -> RunResultsOut:
             SubmissionResultOut(
                 submission_id=row["submission_id"],
                 pseudonym=row["pseudonym"],
+                real_name=names.get(row["submission_id"]),
                 review_flags=list(row["review_flags"] or []),
                 scores=[],
                 feedback_text=row["feedback_text"],

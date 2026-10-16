@@ -57,6 +57,14 @@ class Settings(BaseSettings):
     # real submissions are 750–1,046 characters (~200–260 tokens), so this leaves ~4x headroom.
     llm_max_tokens: int = Field(default=1024, alias="LLM_MAX_TOKENS")
 
+    # The real identifier (DECISIONS.md, 2026-10-16): held outside Neon in a local, encrypted SQLite
+    # file next to this process, never read by anything that calls an LLM. `identity_db_path` is
+    # relative to the backend's working directory unless given as an absolute path; `identity_encryption_key`
+    # has no default because a missing one must fail loudly rather than silently store identifiers
+    # with a key nobody can reproduce.
+    identity_db_path: str = Field(default="data/identities.db", alias="IDENTITY_DB_PATH")
+    identity_encryption_key: str | None = Field(default=None, alias="IDENTITY_ENCRYPTION_KEY")
+
     @property
     def is_production(self) -> bool:
         return self.env == "production"

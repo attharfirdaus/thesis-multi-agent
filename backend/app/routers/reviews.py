@@ -12,6 +12,7 @@ from fastapi import APIRouter, HTTPException, Request, status
 from psycopg.rows import dict_row
 
 from app import db
+from app.ingest.identity_store import read as read_identity
 from app.routers.auth import CurrentUser
 from app.schemas import (
     EvidenceOut,
@@ -121,6 +122,7 @@ def get_submission(submission_id: uuid.UUID, user: CurrentUser) -> SubmissionDet
 
     return SubmissionDetailOut(
         **submission,
+        real_name=read_identity(submission_id, user.id),
         rubric=rubric,
         run=None
         if run is None

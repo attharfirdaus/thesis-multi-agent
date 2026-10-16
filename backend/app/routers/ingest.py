@@ -3,7 +3,8 @@
 The uploaded file is read into memory, extracted, segmented, redacted and then dropped. Nothing about
 the original document is stored — no filename, no metadata, no raw text — because the file carries the
 student's name where the extracted text does not have to. The only identifier that survives is the one
-in `student_identities`, deliberately, so the lecturer knows whose work they are reviewing.
+`app.ingest.identity_store` captures, deliberately, so the lecturer knows whose work they are
+reviewing — held outside Neon, in a local encrypted file, never in this app's own tables.
 """
 
 import uuid
@@ -16,6 +17,9 @@ from psycopg.types.json import Jsonb
 from app import db
 from app.ingest.extract import extract, extract_zip
 from app.ingest.identity import extract_identity
+from app.ingest.identity_store import delete as delete_identity
+from app.ingest.identity_store import read_many as read_identities
+from app.ingest.identity_store import store as store_identity
 from app.ingest.models import ExtractedDocument
 from app.ingest.redact import redact
 from app.ingest.segment import segment
@@ -36,11 +40,12 @@ _SUBMISSION_COLUMNS = (
 )
 
 
-def _as_out(row: dict) -> SubmissionOut:
+def _as_out(row: dict, real_name: str | None = None) -> SubmissionOut:
     return SubmissionOut(
         id=row["id"],
         assignment_id=row["assignment_id"],
         pseudonym=row["pseudonym"],
+        real_name=real_name,
         segmentation_status=row["segmentation_status"],
         has_ai_output=bool(row["ai_output_text"].strip()),
         analysis_chars=len(row["analysis"]),
@@ -81,12 +86,11 @@ def _store(cur, owner_id: uuid.UUID, assignment_id: uuid.UUID, doc: ExtractedDoc
 
     # The identity is captured from the pre-redaction document: the filename always carries the name
     # in this archive, and the labelled line carries it when the student filled the template in.
+    # Held outside Neon (DECISIONS.md, 2026-10-16): `identity_store`, never this transaction, never a
+    # table an agent's query could ever reach.
     real_identifier = extract_identity(doc.filename, doc.text)
     if real_identifier:
-        cur.execute(
-            "insert into student_identities (submission_id, owner_id, real_identifier) values (%s, %s, %s)",
-            (submission_id, owner_id, real_identifier),
-        )
+        store_identity(submission_id, owner_id, real_identifier)
 
     counts: dict[str, int] = {}
     for event in (*ai.events, *analysis.events):
@@ -161,7 +165,8 @@ def list_submissions(assignment_id: uuid.UUID, user: CurrentUser) -> list[Submis
             f"select {_SUBMISSION_COLUMNS} from submissions where assignment_id = %s order by created_at",  # noqa: S608
             (assignment_id,),
         ).fetchall()
-    return [_as_out(row) for row in rows]
+    names = read_identities((row["id"] for row in rows), user.id)
+    return [_as_out(row, names.get(row["id"])) for row in rows]
 
 
 @router.delete("/submissions/{submission_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -193,6 +198,11 @@ def delete_submission(submission_id: uuid.UUID, request: Request, user: CurrentU
                 detail="This submission is still queued or being graded; stop the run first.",
             )
         cur.execute("delete from submissions where id = %s", (submission_id,))
+        # Not a foreign-key cascade any more (DECISIONS.md, 2026-10-16): the identity now lives
+        # outside Postgres, so deleting it is this router's job. Done inside the same transaction so
+        # a failure here rolls the submission delete back too, rather than leaving the submission
+        # gone from Postgres while its name still sits in the local store.
+        delete_identity(submission_id)
 
 
 @router.patch("/submissions/{submission_id}/segmentation", response_model=SubmissionOut)
@@ -235,4 +245,4 @@ def correct_segmentation(
         if updated is None:  # the row cannot vanish inside the transaction; satisfies the type checker
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Submission not found.")
 
-    return _as_out(updated)
+    return _as_out(updated, read_identities([submission_id], user.id).get(submission_id))

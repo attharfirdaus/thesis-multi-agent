@@ -12,7 +12,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { api, type AssignmentDetail, type ImportedFile, type RunSummary, type SubmissionSummary } from "@/lib/api";
-import { flagSentences, modeLabel, warningSentences } from "@/lib/labels";
+import { flagSentences, modeLabel, submissionLabel, warningSentences } from "@/lib/labels";
 
 /** Jobs per request: one call must not sit on the whole batch, and the page shows progress between calls. */
 const PROCESS_CHUNK = 2;
@@ -665,7 +665,7 @@ export default function TugasPage() {
                               href={`/kiriman/${submission.id}`}
                               className="underline underline-offset-4 hover:text-foreground"
                             >
-                              {submission.pseudonym}
+                              {submissionLabel(submission.pseudonym, submission.real_name)}
                             </Link>
                           </td>
                           <td className="py-2 pr-4">

@@ -4,8 +4,10 @@ The list screen is the first thing a lecturer sees, and it shows a count and a r
 query per assignment would make that screen cost one round trip per row, so the counts and the newest
 run are folded into the list query and the job counters into a second one for all of the runs at once.
 
-No response here reads `student_identities.real_identifier`: the pseudonym is the only name the
-lecturer UI receives (FR-04).
+The dashboard list never reads a student's real name — a count of submissions is all it shows — but
+the assignment detail below does, from `app.ingest.identity_store` (DECISIONS.md, 2026-10-16), never
+from `submissions` itself: the redacted text a run reads and the name a lecturer reads come from two
+different stores on purpose.
 """
 
 import uuid
@@ -14,6 +16,7 @@ from fastapi import APIRouter, HTTPException, Request, status
 from psycopg.rows import dict_row
 
 from app import db
+from app.ingest.identity_store import read_many as read_identities
 from app.routers.auth import CurrentUser
 from app.schemas import (
     AssignmentCreate,
@@ -42,11 +45,12 @@ def _jobs_by_run(cur, run_ids: list[uuid.UUID]) -> dict[uuid.UUID, dict[str, int
     return counts
 
 
-def _summary(row: dict) -> SubmissionSummaryOut:
+def _summary(row: dict, real_name: str | None = None) -> SubmissionSummaryOut:
     return SubmissionSummaryOut(
         id=row["id"],
         assignment_id=row["assignment_id"],
         pseudonym=row["pseudonym"],
+        real_name=real_name,
         segmentation_status=row["segmentation_status"],
         has_ai_output=bool(row["ai_output_text"].strip()),
         analysis_chars=len(row["student_analysis_text"]),
@@ -138,16 +142,15 @@ def get_assignment(assignment_id: uuid.UUID, user: CurrentUser) -> AssignmentDet
         if assignment is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Assignment not found.")
 
-        submissions = [
-            _summary(row)
-            for row in cur.execute(
-                "select id, assignment_id, pseudonym, segmentation_status, import_warnings, "
-                "       review_flags, coalesce(ai_output_text, '') as ai_output_text, "
-                "       coalesce(student_analysis_text, '') as student_analysis_text "
-                "from submissions where assignment_id = %s order by created_at desc",
-                (assignment_id,),
-            ).fetchall()
-        ]
+        submission_rows = cur.execute(
+            "select id, assignment_id, pseudonym, segmentation_status, import_warnings, "
+            "       review_flags, coalesce(ai_output_text, '') as ai_output_text, "
+            "       coalesce(student_analysis_text, '') as student_analysis_text "
+            "from submissions where assignment_id = %s order by created_at desc",
+            (assignment_id,),
+        ).fetchall()
+        names = read_identities((row["id"] for row in submission_rows), user.id)
+        submissions = [_summary(row, names.get(row["id"])) for row in submission_rows]
         runs = cur.execute(
             # A run needs review when one of its submissions carries a flag from the pipeline
             # (PRD §6). Counted inside the same query rather than one lookup per run.

@@ -7,6 +7,68 @@ Every provider/model/library fact cited in this project carries a source URL and
 
 No model or provider decision remains open. The hosting decisions (O-2, O-3, O-5) were re-taken twice — on 2026-10-07 (VM dropped) and again on 2026-10-14 (Cloud Run dropped for a card-free host) — see the newest entries; the older ones are kept as the record of what was chosen and why it changed. What is still open lives in PRD section 14 — the supervisors' metacognitive rubric, institutional ethics clearance, the validation-subset size, the SUS instrument, the feedback-text format, and how the two synthetic calibration examples are validated. The few-shot calibration itself is settled: Atthar supplied it on 2026-10-15.
 
+## 2026-10-16 (deepest night) — FR-04 changed: the real identifier moves out of Neon, resolving the residual risk from O-4 (2026-10-14)
+
+Atthar asked whether the lecturer's screen can keep showing a student's real name while the agent pipeline
+still only ever sees pseudonymised text. Technically this was already true before tonight — `identity.py`
+captured the name pre-redaction, `student_identities` held it, RLS scoped it to its owner, and no agent-facing
+code ever read it — but no response surfaced it and `app/routers/assignments.py` carried an explicit comment
+against doing so. The withholding was deliberate: the hosting entry of 2026-10-14 had already flagged
+`StudentIdentity.real_identifier` as "the highest-harm table in the system" and recorded, as a residual risk,
+that a privacy review recommends keeping it outside any managed database — a change to FR-04 that needed
+Atthar's decision before anything built on top of it.
+
+**Decided, by Atthar, in two steps (asked explicitly, not inferred):** (1) move the identity mapping outside
+Neon before ever displaying it, rather than accept the residual risk as-is or add a per-screen hide/show
+toggle around the existing Neon-backed table; (2) encrypt it at rest (Fernet, key in `.env`, never Neon) rather
+than rely on file permissions alone, accepting the added `cryptography` dependency and key-management
+complexity as the cost of that extra layer.
+
+**What moved.** `student_identities` is dropped from Postgres (migration `0006_drop_student_identities.sql`,
+applied to the dev database — it held 0 rows, so there was nothing to migrate forward). Its replacement,
+`app/ingest/identity_store.py`, is a Fernet-encrypted SQLite file next to the backend process
+(`IDENTITY_DB_PATH`, `IDENTITY_ENCRYPTION_KEY` — both required, both absent from every example file by
+design). The backend already runs on Atthar's own machine (O-4, 2026-10-14), so this is the smallest move
+that actually gets the value out of a third-party database: no new service, one more local file next to the
+one `scripts/dev.sh` already starts.
+
+**What this costs, stated rather than hidden:**
+- **No row-level security here.** Every Postgres tenant table gets RLS for free; SQLite has none, so
+  `identity_store.py` filters by `owner_id` in the query itself, in application code, for every read and
+  write. This is a real reduction in defence-in-depth — RLS protected against an *application* bug reaching
+  another lecturer's row, this new layer cannot. Mitigated as far as a test can: `tests/test_identity_store.py`
+  mutation-tests exactly this filter (confirmed to fail when the `owner_id` clause is removed, both for
+  `read_many` and the single-row path it is built on).
+- **No managed backup.** Neon backs up every table it holds; a plain file next to the process does not, unless
+  Atthar backs it up himself. Recorded here rather than assumed solved.
+- **No foreign-key cascade.** `DELETE /submissions/{id}` used to cascade this row for free; now the router
+  deletes it explicitly, inside the same Postgres transaction, so a failure there rolls the submission delete
+  back too rather than leaving an orphaned name for a submission that is already gone
+  (`backend/app/routers/ingest.py`).
+
+**Where the name now appears**, all newly wired, none of it touching an agent: `GET /assignments/{id}`,
+`GET /runs/{id}/results`, `GET /submissions/{id}`, and the assignment-detail submission list, each carrying
+`real_name: str | null` next to `pseudonym` — `null` whenever ingest found nothing to capture, never a
+placeholder. Frontend display delegated with a frozen contract: pseudonym stays the system identifier
+everywhere it already is one (URLs, exports), the real name is shown beside it only where a pseudonym already
+renders today.
+
+**Verified live** (throwaway account, real local backend, deleted after): uploaded a file containing
+`Nama: Siti Rahma Wulandari` — `real_name` appeared correctly on the upload response, `list_submissions`,
+assignment detail, and submission detail, while `select to_regclass('student_identities')` against the real
+Neon database returned `NULL` (table gone) throughout. Deleting the submission removed it from the local store
+(confirmed via `identity_store.read` returning `None` after).
+
+**A pre-existing bug this surfaced, not fixed here — flagged for Atthar's call:** `upload_submissions` runs
+every file in a batch through one shared Postgres transaction with a per-file `try/except` around the whole
+body. When an exception lands after a submission's row is already inserted (a bad name-capture call is a new,
+much more likely way to trigger this than the rare constraint violation that could have hit the old
+`student_identities` insert the same way), the file is reported `"failed"` to the lecturer while its
+submission row still commits, redacted text and all, as an orphan nothing in the UI points at. Seen live, once,
+from a misconfigured key before `.env` was fixed, and cleaned up by hand. Not this task's scope — it predates
+tonight's change and needs a decision about per-file atomicity (a savepoint per file, most likely), not a
+quick patch bolted onto this one.
+
 ## 2026-10-16 (deep night) — FR-15 and FR-16 built, two defects found and fixed in live verification
 
 Built both phase-6 features on top of the plan recorded in the entry below (the same night): the single-agent

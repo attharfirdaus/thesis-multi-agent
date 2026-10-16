@@ -118,6 +118,7 @@ export type AssignmentSummary = {
 export type SubmissionSummary = {
   id: string;
   pseudonym: string;
+  real_name?: string | null;
   segmentation_status: string;
   review_flags?: string[];
   import_warnings?: string[];
@@ -166,6 +167,7 @@ export type SubmissionDetail = {
   id: string;
   assignment_id: string;
   pseudonym: string;
+  real_name?: string | null;
   segmentation_status: string;
   review_flags?: string[];
   import_warnings?: string[];
@@ -197,6 +199,7 @@ export type RunResults = {
   submissions: {
     submission_id: string;
     pseudonym: string;
+    real_name?: string | null;
     review_flags?: string[];
     /** Exactly the text the export writes: `coalesce(edited_text, generated_text)`. */
     feedback_text: string | null;

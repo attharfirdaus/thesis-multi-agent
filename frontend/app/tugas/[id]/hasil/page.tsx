@@ -11,13 +11,14 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Label } from "@/components/ui/label";
 import { API_BASE, api, type AssignmentDetail, type RunResults } from "@/lib/api";
-import { levelLabel, modeLabel, scoreLevel } from "@/lib/labels";
+import { levelLabel, modeLabel, scoreLevel, submissionLabel } from "@/lib/labels";
 
 type SortKey = "pseudonym" | "level" | "review";
 
 type Row = {
   id: string;
   pseudonym: string;
+  real_name: string | null;
   level: string | null;
   indicators: Record<string, string>;
   flagged: boolean;
@@ -46,7 +47,9 @@ function ExportPreview({
 }) {
   return (
     <div className="flex flex-col gap-4 rounded-lg bg-muted/40 p-4">
-      <p className="font-medium">Pratinjau isi ekspor untuk {submission.pseudonym}</p>
+      <p className="font-medium">
+        Pratinjau isi ekspor untuk {submissionLabel(submission.pseudonym, submission.real_name)}
+      </p>
 
       {submission.scores.map((score) => (
         <div key={score.id} className="flex flex-col gap-2">
@@ -140,6 +143,7 @@ export default function HasilPage() {
     return {
       id: submission.submission_id,
       pseudonym: submission.pseudonym,
+      real_name: submission.real_name ?? null,
       level: submission.scores.find((score) => score.dimension === "cognitive")?.level ?? null,
       indicators,
       flagged: (submission.review_flags ?? []).length > 0,
@@ -331,7 +335,7 @@ export default function HasilPage() {
                                     href={`/kiriman/${row.id}`}
                                     className="underline underline-offset-4 hover:text-foreground"
                                   >
-                                    {row.pseudonym}
+                                    {submissionLabel(row.pseudonym, row.real_name)}
                                   </Link>
                                 </td>
                               <td className="py-2 pr-4">

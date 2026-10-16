@@ -14,6 +14,7 @@ import openpyxl
 from conftest import INDICATORS, LEVEL_NAMES, LEVELS, QUOTE_COGNITIVE
 
 from app import db
+from app.ingest import identity_store
 from app.jobs.queue import claim_jobs
 from app.routers.export import COLUMNS, RESEARCH_COLUMNS
 
@@ -58,7 +59,6 @@ def _rows_for(conn, submission_id: uuid.UUID) -> dict[str, int]:
         ("agent_traces", "select count(*) from agent_traces where submission_id = %s"),
         ("feedback", "select count(*) from feedback where submission_id = %s"),
         ("jobs", "select count(*) from jobs where submission_id = %s"),
-        ("student_identities", "select count(*) from student_identities where submission_id = %s"),
         (
             "evidence",
             "select count(*) from evidence e join system_scores s on s.id = e.system_score_id "
@@ -418,10 +418,13 @@ def test_deleting_a_submission_takes_everything_derived_from_it(seeded):
     """One delete, because the rows a lecturer can no longer see are still rows about a student."""
     client, csrf = seeded["client"], seeded["csrf"]
     run_id = _run_batch(seeded)
-    submission = seeded["submission"]
+    submission = uuid.UUID(seeded["submission"])
     with db.tenant_tx(seeded["user"]) as conn:
         counts = _rows_for(conn, submission)
     assert counts["system_scores"] > 0 and counts["agent_traces"] > 0 and counts["jobs"] > 0
+    # The filename ("Tugas 1_Dosen Runs.docx") carries a name, so this submission has one — not a
+    # foreign key any more (DECISIONS.md, 2026-10-16), so it needs its own before/after check.
+    assert identity_store.read(submission, seeded["user"]) == "Dosen Runs"
 
     response = client.delete(f"/submissions/{submission}", headers={"X-CSRF-Token": csrf})
     assert response.status_code == 204, response.text
@@ -434,8 +437,8 @@ def test_deleting_a_submission_takes_everything_derived_from_it(seeded):
             "agent_traces": 0,
             "feedback": 0,
             "jobs": 0,
-            "student_identities": 0,
         }
+    assert identity_store.read(submission, seeded["user"]) is None
     assignment = client.get(f"/assignments/{seeded['assignment']}").json()
     assert assignment["submissions"] == []
     assert client.get(f"/runs/{run_id}/results").json()["submissions"] == []

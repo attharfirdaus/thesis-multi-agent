@@ -28,6 +28,10 @@ dependencies = [
     "httpx==0.28.1",
     # XLSX export (FR-12). Latest stable, verified on PyPI 2026-10-15.
     "openpyxl==3.1.5",
+    # Encrypting the real identifier at rest in the local store (DECISIONS.md, 2026-10-16): Fernet
+    # only, no new transitive surface beyond what psycopg[binary] already pulls in. Already present
+    # at 50.0.2 before this was a direct dependency; pinned explicitly now that code imports it.
+    "cryptography==50.0.2",
 ]
 # Phase 3 adds ingestion; verify versions when they are actually used.
 

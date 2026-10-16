@@ -38,6 +38,15 @@ const MODE_LABELS: Record<string, string> = {
 export const modeLabel = (mode: string): string => MODE_LABELS[mode] ?? mode;
 
 /**
+ * The pseudonym stays the system identifier everywhere it already appears; the real name (captured
+ * at upload, stored outside the database — DECISIONS.md 2026-10-16) is shown beside it when ingest
+ * found one. `null` means no name was captured, not an error, so it adds nothing rather than a
+ * placeholder.
+ */
+export const submissionLabel = (pseudonym: string, realName?: string | null): string =>
+  realName ? `${realName} (${pseudonym})` : pseudonym;
+
+/**
  * The metacognitive dimension's words for how strong an indicator is. They are the rubric's words for
  * that dimension, but they do not sit in `rubric.levels` (which carries the cognitive scale alone), so
  * they are named here and the runnable check keeps this list equal to `Strength` in

@@ -13,7 +13,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { api, type Score, type SubmissionDetail } from "@/lib/api";
 import { buildSegments, combinedDocument } from "@/lib/evidence";
-import { flagSentences, levelLabel, scoreLevel } from "@/lib/labels";
+import { flagSentences, levelLabel, scoreLevel, submissionLabel } from "@/lib/labels";
 
 const DIMENSION_LABEL: Record<Score["dimension"], string> = {
   cognitive: "Tingkat Kognitif",
@@ -248,7 +248,7 @@ export default function KirimanPage() {
         <>
           <header className="flex flex-wrap items-start justify-between gap-4">
             <div className="flex flex-col gap-2">
-              <h1 className="text-2xl font-semibold">{detail.pseudonym}</h1>
+              <h1 className="text-2xl font-semibold">{submissionLabel(detail.pseudonym, detail.real_name)}</h1>
               <div className="flex flex-wrap items-center gap-2">
                 <StatusBadge {...segmentationStatus(detail.segmentation_status)} />
                 {detail.run ? <StatusBadge {...runStatus(detail.run.status)} /> : null}

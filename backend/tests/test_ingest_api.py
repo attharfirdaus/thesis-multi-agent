@@ -14,6 +14,7 @@ import pytest
 from psycopg.rows import dict_row
 
 from app import db
+from app.ingest import identity_store
 from app.ingest.segment import NO_AI_WARNING
 
 NAME = "Budi Santoso"
@@ -88,10 +89,7 @@ def test_import_removes_identifiers_and_keeps_the_mapping(lecturer):
             "from submissions where id = %s",
             (entry["submission_id"],),
         ).fetchone()
-        identity = cur.execute(
-            "select real_identifier from student_identities where submission_id = %s",
-            (entry["submission_id"],),
-        ).fetchone()
+        identity = identity_store.read(uuid.UUID(entry["submission_id"]), lecturer["user"])
         events = cur.execute(
             "select cls, count from redaction_events where submission_id = %s",
             (entry["submission_id"],),
@@ -108,7 +106,7 @@ def test_import_removes_identifiers_and_keeps_the_mapping(lecturer):
     assert NIM not in stored["student_analysis_text"]
     assert "budi.santoso@example.ac.id" not in stored["student_analysis_text"]
     # ...while the lecturer can still tell whose work it is.
-    assert identity["real_identifier"] == NAME
+    assert identity == NAME
     assert {e["cls"] for e in events} >= {"name_label", "student_id", "email"}
     # No row anywhere may hold the removed value.
     assert all(NAME not in str(dict(e)) for e in events)

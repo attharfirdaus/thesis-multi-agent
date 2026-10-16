@@ -18,6 +18,10 @@ os.environ["MIGRATION_DATABASE_URL"] = (
     "postgresql://thesis_migrator:migrator_local_pw@localhost:5432/thesis_test"
 )
 os.environ["COOKIE_SECURE"] = "false"
+# A throwaway Fernet key and a file inside the test tmp area: never the dev .env's real key or path,
+# so a test run can never touch — or be confused with — a real student's identifiers.
+os.environ["IDENTITY_DB_PATH"] = str(BACKEND / ".pytest_identities.db")
+os.environ["IDENTITY_ENCRYPTION_KEY"] = "AVmxjfIU9ch5We_LMpyjTKsxVx_kDaWkRpNQelo4SV0="
 # Also forced: `source .env` in bash strips the quotes from this JSON list, and Settings prefers
 # an environment variable over the file, so an inherited value would fail to parse.
 os.environ["ALLOWED_ORIGINS"] = '["http://localhost:3000"]'
@@ -55,7 +59,7 @@ from scripts.setup_checkpointer import setup as setup_checkpointer  # noqa: E402
 
 TENANT_TABLES = [
     "feedback", "lecturer_reviews", "evidence", "system_scores", "jobs", "agent_traces",
-    "runs", "student_identities", "submissions", "prompt_versions", "assignments",
+    "runs", "submissions", "prompt_versions", "assignments",
     "rubric_versions", "sessions", "users",
 ]
 
@@ -73,6 +77,10 @@ def migrated():
 def clean_db():
     with psycopg.connect(os.environ["MIGRATION_DATABASE_URL"], autocommit=True) as conn:
         conn.execute(f"truncate {', '.join(TENANT_TABLES)} cascade")
+    # Deleted rather than reset-in-place: `identity_store` creates the table itself on first use, so
+    # removing the file each test is the whole fixture, matching how `truncate` above starts every
+    # test from nothing.
+    pathlib.Path(os.environ["IDENTITY_DB_PATH"]).unlink(missing_ok=True)
     yield
 
 

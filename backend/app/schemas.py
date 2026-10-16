@@ -58,6 +58,10 @@ class SubmissionOut(BaseModel):
     id: UUID
     assignment_id: UUID
     pseudonym: str
+    #: The student's real name, from `app.ingest.identity_store` (DECISIONS.md, 2026-10-16) — never
+    #: from an agent, never stored alongside the redacted text. `None` when ingest found no name to
+    #: capture, or when the local store has nothing for this submission.
+    real_name: str | None = None
     segmentation_status: Literal["pending", "segmented", "confirmed", "failed"]
     has_ai_output: bool
     analysis_chars: int
@@ -101,6 +105,7 @@ class ScoreOut(BaseModel):
 class SubmissionResultOut(BaseModel):
     submission_id: UUID
     pseudonym: str
+    real_name: str | None = None
     review_flags: list[str] = Field(default_factory=list)
     scores: list[ScoreOut] = Field(default_factory=list)
     #: What the export will write: the lecturer's edit when there is one, otherwise the generated text.
@@ -239,6 +244,7 @@ class SubmissionDetailOut(BaseModel):
     # assignment; without this the lecturer's only way back is the browser's own history.
     assignment_id: UUID
     pseudonym: str
+    real_name: str | None = None
     segmentation_status: Literal["pending", "segmented", "confirmed", "failed"]
     import_warnings: list[str] = Field(default_factory=list)
     review_flags: list[str] = Field(default_factory=list)
