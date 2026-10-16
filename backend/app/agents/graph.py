@@ -36,6 +36,7 @@ from app.agents.models import (
     EvidenceSpan,
     GraphState,
     MetacognitiveResult,
+    SingleAgentResult,
     SynthesisResult,
 )
 from app.llm.client import ProviderClient
@@ -45,6 +46,7 @@ from app.llm.client import ProviderClient
 COGNITIVE_FAILED = "cognitive_agent_failed"
 METACOGNITIVE_FAILED = "metacognitive_agent_failed"
 SYNTHESIS_FAILED = "synthesis_agent_failed"
+SINGLE_AGENT_FAILED = "single_agent_failed"
 SYNTHESIS_RETRIED = "synthesis_retried"
 EVIDENCE_UNVERIFIED = "evidence_unverified"
 NEEDS_REVIEW = "needs_review"
@@ -191,6 +193,50 @@ def _metacognitive_node(client: ProviderClient | None) -> Callable[[GraphState],
     return node
 
 
+def _single_agent_node(client: ProviderClient | None) -> Callable[[GraphState], dict[str, Any]]:
+    """FR-15's baseline: one call over the full rubric, split into the same two shapes the
+    multi-agent path produces, so the evidence node and persistence need no mode-specific branch.
+
+    A failure here costs both dimensions, because one call produced them both — there is no
+    partial result to keep the way the two parallel multi-agent nodes can keep each other's.
+    """
+
+    def node(state: GraphState) -> dict[str, Any]:
+        started = time.monotonic()
+        try:
+            system, user = prompts.single_agent_prompt(
+                rubric=state["rubric"],
+                calibration=_calibration(state),
+                analysis_text=state["student_analysis_text"],
+            )
+            completion = _client(client).complete_json(
+                system=system, user=user, schema=SingleAgentResult
+            )
+        except prompts.MissingCalibration:
+            raise
+        except Exception as exc:
+            return {
+                "cognitive": None,
+                "metacognitive": None,
+                "single_agent": None,
+                "latencies": {"single_agent": _elapsed_ms(started)},
+                **_failure(SINGLE_AGENT_FAILED, exc),
+            }
+        baseline = _parsed(completion.parsed, SingleAgentResult)
+        return {
+            "cognitive": CognitiveResult(
+                level=baseline.level,
+                evidence_quote=baseline.evidence_quote,
+                rationale=baseline.rationale,
+            ),
+            "metacognitive": MetacognitiveResult(findings=baseline.findings),
+            "single_agent": baseline,
+            "latencies": {"single_agent": completion.latency_ms},
+        }
+
+    return node
+
+
 def _synthesise(
     state: GraphState, client: ProviderClient | None, retry_reason: str | None
 ) -> tuple[SynthesisResult, int]:
@@ -282,7 +328,8 @@ def evidence(state: GraphState) -> dict[str, Any]:
 
 
 def build_graph(checkpointer: Any = None, client: ProviderClient | None = None):
-    """Compile the PRD §6 graph. `checkpointer` is a LangGraph saver; `client` is injected in tests."""
+    """Compile the PRD §6 multi-agent graph. `checkpointer` is a LangGraph saver; `client` is
+    injected in tests."""
     graph: StateGraph[GraphState] = StateGraph(GraphState)
     # The three factory-built nodes are cast because mypy 1.x cannot match a callable produced by a
     # factory against langgraph's node-protocol union (`_Node[NodeInputT] | ...`): a closure always
@@ -306,6 +353,33 @@ def build_graph(checkpointer: Any = None, client: ProviderClient | None = None):
     return graph.compile(checkpointer=checkpointer)
 
 
+def build_single_agent_graph(checkpointer: Any = None, client: ProviderClient | None = None):
+    """Compile the FR-15 baseline graph: one judgement call, then the same evidence check.
+
+    `preprocess` and `evidence` are the exact multi-agent nodes, unmodified: the baseline differs
+    only in how the rubric is judged, not in how an empty submission is refused or a quote is
+    located.
+    """
+    graph: StateGraph[GraphState] = StateGraph(GraphState)
+    graph.add_node("preprocess", preprocess)
+    graph.add_node("single_agent", cast(Any, _single_agent_node(client)))
+    graph.add_node("evidence", evidence)
+    graph.add_edge(START, "preprocess")
+    graph.add_edge("preprocess", "single_agent")
+    graph.add_edge("single_agent", "evidence")
+    graph.add_edge("evidence", END)
+    return graph.compile(checkpointer=checkpointer)
+
+
+#: Mode -> graph builder (FR-15). The run's own `mode` column selects the pipeline; a mode this
+#: dict does not know is a data error the worker must not paper over, so `evaluate_submission`
+#: raises rather than default to a graph the run never asked for.
+_GRAPH_BUILDERS: dict[str, Callable[..., Any]] = {
+    "multi_agent": build_graph,
+    "single_agent": build_single_agent_graph,
+}
+
+
 def evaluate_submission(
     state: GraphState, client: ProviderClient | None = None, checkpointer: Any = None
 ) -> GraphState:
@@ -321,10 +395,18 @@ def evaluate_submission(
     run whose call timed out stuck to a submission the next run scored fine, and the lecturer kept reading
     "Perlu ditinjau" next to a score that existed (seen live, 2026-10-16). Within one run the same thread
     still resumes an interrupted submission, which is what the checkpointer is for.
+
+    `state["mode"]` picks the graph (FR-15); state built before the baseline existed carries no mode
+    at all, so a missing key still means the multi-agent path it always meant.
     """
+    mode = state.get("mode") or "multi_agent"
+    try:
+        build = _GRAPH_BUILDERS[mode]
+    except KeyError:
+        raise ValueError(f"unknown run mode {mode!r}") from None
     config = (
         {"configurable": {"thread_id": f"{state['run_id']}:{state['submission_id']}"}}
         if checkpointer
         else None
     )
-    return build_graph(client=client, checkpointer=checkpointer).invoke(state, config)
+    return build(client=client, checkpointer=checkpointer).invoke(state, config)

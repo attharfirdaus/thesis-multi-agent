@@ -26,7 +26,12 @@ from typing import Any
 
 from pydantic import BaseModel
 
-from app.agents.models import CognitiveResult, MetacognitiveResult, SynthesisResult
+from app.agents.models import (
+    CognitiveResult,
+    MetacognitiveResult,
+    SingleAgentResult,
+    SynthesisResult,
+)
 
 
 class MissingCalibration(RuntimeError):
@@ -66,6 +71,13 @@ _SYNTHESIS_TASK = """Your task: for the lecturer, write the rationale that bring
 and the metacognitive findings together, and the feedback text the student receives. You do not
 re-score: keep the level and the findings you are given, and say so in the rationale when they
 contradict the text."""
+
+_SINGLE_AGENT_TASK = """Your task: read the student's analysis once and report the whole rubric on it in
+one response. Assign the one cognitive level that best describes the analysis with the sentence that
+decides it, and report one finding for every metacognitive indicator listed in the user message. This
+is one judgement of one text, not two separate questions: the level and the findings must describe the
+same reading. Set `present` to false and leave `evidence_quote` empty for an indicator the analysis
+shows no trace of."""
 
 _COGNITIVE_USER = Template("""Rubrik versi $rubric_version.
 
@@ -123,6 +135,27 @@ $ai_output_text
 $retry_block
 Balas hanya dengan JSON sesuai skema.""")
 
+_SINGLE_AGENT_USER = Template("""Rubrik versi $rubric_version.
+
+Level kognitif yang tersedia:
+$levels
+
+Indikator metakognitif, satu temuan untuk setiap indikator:
+$indicators
+
+Contoh kalibrasi kognitif (wajib; ikuti gaya penilaiannya):
+$cognitive_calibration
+
+Contoh kalibrasi metakognitif (wajib; ikuti gaya penilaiannya):
+$metacognitive_calibration
+
+Teks analisis mahasiswa:
+<teks_mahasiswa>
+$analysis_text
+</teks_mahasiswa>
+
+Balas hanya dengan JSON sesuai skema.""")
+
 
 def _schema(model: type[BaseModel]) -> str:
     """The response schema as JSON, `$defs` and all, so every `$ref` in it stays resolvable."""
@@ -140,6 +173,10 @@ TEMPLATES: dict[str, tuple[str, str]] = {
     "cognitive": (_system(_COGNITIVE_TASK, CognitiveResult), _COGNITIVE_USER.template),
     "metacognitive": (_system(_METACOGNITIVE_TASK, MetacognitiveResult), _METACOGNITIVE_USER.template),
     "synthesis": (_system(_SYNTHESIS_TASK, SynthesisResult), _SYNTHESIS_USER.template),
+    "single_agent": (
+        _system(_SINGLE_AGENT_TASK, SingleAgentResult),
+        _SINGLE_AGENT_USER.template,
+    ),
 }
 
 
@@ -204,6 +241,20 @@ def metacognitive_prompt(
         analysis_text=analysis_text,
     )
     return TEMPLATES["metacognitive"][0], user
+
+
+def single_agent_prompt(
+    rubric: dict[str, Any], calibration: dict[str, Any], analysis_text: str
+) -> tuple[str, str]:
+    """The FR-15 baseline: one call over the whole rubric. Both calibration blocks are mandatory
+    (PRD §6, §12) — the baseline is still a calibrated judgement, not an uncalibrated shortcut."""
+    user = _SINGLE_AGENT_USER.substitute(
+        **_rubric_slots(rubric),
+        cognitive_calibration=_calibration_block(calibration, "cognitive"),
+        metacognitive_calibration=_calibration_block(calibration, "metacognitive"),
+        analysis_text=analysis_text,
+    )
+    return TEMPLATES["single_agent"][0], user
 
 
 def synthesis_prompt(

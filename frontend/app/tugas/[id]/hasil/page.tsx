@@ -11,7 +11,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Label } from "@/components/ui/label";
 import { API_BASE, api, type AssignmentDetail, type RunResults } from "@/lib/api";
-import { levelLabel, scoreLevel } from "@/lib/labels";
+import { levelLabel, modeLabel, scoreLevel } from "@/lib/labels";
 
 type SortKey = "pseudonym" | "level" | "review";
 
@@ -38,9 +38,11 @@ const DIMENSION_LABEL: Record<"cognitive" | "metacognitive", string> = {
 function ExportPreview({
   submission,
   levelNames,
+  mode,
 }: {
   submission: RunResults["submissions"][number];
   levelNames: Record<string, string>;
+  mode?: string;
 }) {
   return (
     <div className="flex flex-col gap-4 rounded-lg bg-muted/40 p-4">
@@ -87,7 +89,10 @@ function ExportPreview({
           {submission.feedback_edited ? "Umpan balik (disunting dosen)" : "Umpan balik"}
         </p>
         <p className="text-muted-foreground whitespace-pre-wrap">
-          {submission.feedback_text ?? "Belum ada umpan balik."}
+          {submission.feedback_text ??
+            (mode === "single_agent"
+              ? "Baseline single-agen tidak menghasilkan umpan balik."
+              : "Belum ada umpan balik.")}
         </p>
       </div>
     </div>
@@ -226,7 +231,8 @@ export default function HasilPage() {
                 <CardHeader>
                   <CardTitle>Ekspor hasil</CardTitle>
                   <CardDescription>
-                    Berkas memuat nilai, kutipan bukti, catatan tinjauan, dan umpan balik per kiriman.
+                    Berkas penilaian memuat nilai, kutipan bukti, catatan tinjauan, dan umpan balik untuk
+                    penilaian yang sedang ditampilkan.
                   </CardDescription>
                 </CardHeader>
                 <CardContent className="flex flex-col gap-4">
@@ -238,9 +244,28 @@ export default function HasilPage() {
                       <a href={`${API_BASE}/runs/${run.id}/export.xlsx`}>Ekspor XLSX</a>
                     </Button>
                   </div>
-                  <p className="text-sm text-muted-foreground">
+                  <p className="flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
                     Status penilaian: <StatusBadge {...runStatus(run.status)} />
+                    {run.mode ? (
+                      <>
+                        Mode: <StatusBadge tone="neutral" label={modeLabel(run.mode)} />
+                      </>
+                    ) : null}
                   </p>
+                  <div className="flex flex-col gap-2 border-t pt-4">
+                    <p className="text-sm text-muted-foreground">
+                      Berkas riset berbeda dari berkas penilaian: isinya seluruh penilaian pada tugas ini
+                      beserta nilai apa adanya dan keterangan mode, untuk diolah lebih lanjut.
+                    </p>
+                    <div className="flex flex-wrap gap-3">
+                      <Button asChild variant="outline">
+                        <a href={`${API_BASE}/assignments/${id}/research-export.csv`}>Ekspor riset (CSV)</a>
+                      </Button>
+                      <Button asChild variant="outline">
+                        <a href={`${API_BASE}/assignments/${id}/research-export.xlsx`}>Ekspor riset (XLSX)</a>
+                      </Button>
+                    </div>
+                  </div>
                 </CardContent>
               </Card>
 
@@ -346,7 +371,11 @@ export default function HasilPage() {
                               {expandedId === row.id ? (
                                 <tr id={`pratinjau-${row.id}`} className="border-b">
                                   <td colSpan={4 + indicatorColumns.length} className="py-3">
-                                    <ExportPreview submission={row.source} levelNames={levelNames} />
+                                    <ExportPreview
+                                      submission={row.source}
+                                      levelNames={levelNames}
+                                      mode={run?.mode}
+                                    />
                                   </td>
                                 </tr>
                               ) : null}

@@ -8,6 +8,7 @@
 export const FLAG_SENTENCES: Record<string, string> = {
   cognitive_agent_failed: "Penilaian tingkat kognitif gagal — coba jalankan ulang.",
   metacognitive_agent_failed: "Penilaian indikator metakognitif gagal — coba jalankan ulang.",
+  single_agent_failed: "Penilaian baseline gagal — coba jalankan ulang.",
   synthesis_agent_failed: "Penjelasan dan umpan balik belum bisa dibuat.",
   synthesis_retried: "Penjelasan disusun ulang karena kutipan tidak ditemukan.",
   evidence_unverified: "Kutipan bukti tidak ditemukan pada tulisan mahasiswa.",
@@ -24,6 +25,17 @@ export const FLAG_FALLBACK = "Perlu ditinjau dosen.";
 export function flagSentences(codes: string[]): string[] {
   return [...new Set(codes.map((code) => FLAG_SENTENCES[code] ?? FLAG_FALLBACK))];
 }
+
+/**
+ * How a run grades. The database constrains `runs.mode` to these two values (migration 0001), so the
+ * fallback cannot fire in practice; it is there so a future mode reads as itself rather than vanishing.
+ */
+const MODE_LABELS: Record<string, string> = {
+  multi_agent: "Multi-agen",
+  single_agent: "Baseline single-agen",
+};
+
+export const modeLabel = (mode: string): string => MODE_LABELS[mode] ?? mode;
 
 /**
  * The metacognitive dimension's words for how strong an indicator is. They are the rubric's words for

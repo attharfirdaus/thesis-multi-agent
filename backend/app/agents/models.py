@@ -48,6 +48,19 @@ class MetacognitiveResult(BaseModel):
     findings: list[IndicatorFinding] = Field(min_length=1)
 
 
+class SingleAgentResult(CognitiveResult):
+    """The single-agent baseline's answer, in one object (FR-15, PRD §12).
+
+    One call judges the whole rubric, so the model returns the cognitive level with its quote and
+    rationale plus the metacognitive findings together. This is a baseline shape, not a merged
+    multi-agent result: nothing here reconciles two independent calls, which is exactly the
+    difference the comparison is meant to expose (PRD §12). The graph splits it back into
+    `CognitiveResult` and `MetacognitiveResult` so evidence checking and persistence keep one path.
+    """
+
+    findings: list[IndicatorFinding] = Field(min_length=1)
+
+
 class SynthesisResult(BaseModel):
     """What the lecturer reads. `rationale` explains the scores, `feedback_text` is the per-student
     feedback of FR-19 that the lecturer may edit before export."""
@@ -96,6 +109,9 @@ class GraphState(TypedDict, total=False):
     owner_id: str
     run_id: str
     submission_id: str
+    # The run's mode, read from the run row: it selects which graph grades the submission (FR-15),
+    # so the worker's CLI and the API both route through one place.
+    mode: str
     rubric: dict
     prompts: dict
 
@@ -107,6 +123,10 @@ class GraphState(TypedDict, total=False):
     cognitive: CognitiveResult | None
     metacognitive: MetacognitiveResult | None
     synthesis: SynthesisResult | None
+    # The baseline's raw answer, kept so its one trace carries what the one call actually returned
+    # (FR-15). The multi-agent path leaves it None, and `cognitive`/`metacognitive` above are the
+    # split the rest of the pipeline reads either way.
+    single_agent: SingleAgentResult | None
 
     # Evidence, filled by the evidence node after the agents have run. Only that node writes these,
     # so plain (overwriting) channels are correct — a reducer would let a later node silently append

@@ -44,6 +44,7 @@ from app.agents.models import (  # noqa: E402
     CognitiveResult,
     IndicatorFinding,
     MetacognitiveResult,
+    SingleAgentResult,
     SynthesisResult,
 )
 from app.llm.client import Completion  # noqa: E402
@@ -146,6 +147,43 @@ class StubClient:
             SynthesisResult: SynthesisResult(
                 rationale="Analisis menunjukkan perbandingan yang sadar antara dua kerangka kerja.",
                 feedback_text="Perbandingan Anda sudah baik; tambahkan contoh penerapan agar lebih kuat.",
+            ),
+            # FR-15's baseline: the same cognitive level and metacognitive findings as above, in
+            # the one-call shape, so a test can run both modes over the same stubbed answer.
+            SingleAgentResult: SingleAgentResult(
+                level="C4",
+                evidence_quote=QUOTE_COGNITIVE,
+                rationale="Mahasiswa menilai dua kerangka kerja dan membandingkan fokusnya.",
+                findings=[
+                    IndicatorFinding(
+                        indicator="elaborasi",
+                        present=True,
+                        strength="kuat",
+                        evidence_quote=QUOTE_METACOGNITIVE,
+                        rationale="Memperluas dengan membandingkan dua kerangka kerja.",
+                    ),
+                    IndicatorFinding(
+                        indicator="evaluasi",
+                        present=True,
+                        strength="sedang",
+                        evidence_quote=QUOTE_COGNITIVE,
+                        rationale="Memberi penilaian tentang keterbatasan masing-masing.",
+                    ),
+                    IndicatorFinding(
+                        indicator="organisasi",
+                        present=False,
+                        strength=None,
+                        evidence_quote="",
+                        rationale="Tidak terlihat penataan ulang materi.",
+                    ),
+                    IndicatorFinding(
+                        indicator="orientasi",
+                        present=False,
+                        strength=None,
+                        evidence_quote="",
+                        rationale="Tidak ada perumusan tujuan belajar.",
+                    ),
+                ],
             ),
         }[schema]
         return Completion(parsed=payload, raw=json.dumps(payload.model_dump()), latency_ms=7, attempts=1)

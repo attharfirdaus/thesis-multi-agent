@@ -51,7 +51,9 @@ def pool():
     db.close_pool()
 
 
-def make_lecturer(submissions: int = 3, *, rubric: bool = True, calibration: bool = True) -> dict:
+def make_lecturer(
+    submissions: int = 3, *, rubric: bool = True, calibration: bool = True, mode: str = "multi_agent"
+) -> dict:
     """A lecturer holding an assignment, N redacted submissions and one run with a frozen rubric."""
     owner, assignment, run = uuid.uuid4(), uuid.uuid4(), uuid.uuid4()
     ids = [uuid.uuid4() for _ in range(submissions)]
@@ -72,8 +74,8 @@ def make_lecturer(submissions: int = 3, *, rubric: bool = True, calibration: boo
                 (submission, owner, assignment, ANALYSIS, AI_OUTPUT),
             )
         cur.execute(
-            "insert into runs (id, owner_id, assignment_id, mode) values (%s, %s, %s, 'multi_agent')",
-            (run, owner, assignment),
+            "insert into runs (id, owner_id, assignment_id, mode) values (%s, %s, %s, %s)",
+            (run, owner, assignment, mode),
         )
         if rubric:
             version = uuid.uuid4()
@@ -457,3 +459,61 @@ def test_a_graph_that_produced_nothing_is_not_recorded_as_done(monkeypatch):
     assert job["status"] == "queued", "a first failure is retryable, not terminal"
     assert "no agent produced output" in (job["last_error"] or "")
     assert "boom" in (job["last_error"] or "")
+
+
+def test_a_single_agent_run_takes_the_baseline_path_and_stores_one_trace(monkeypatch):
+    """FR-15: `mode` reaches the graph from the database (`_load_state` reads `runs.mode`), a run
+    created with `single_agent` takes the baseline path, and one call stores both dimensions'
+    scores plus exactly one new `agent_traces` row named `single_agent`. The graph itself is real;
+    only the provider is stubbed.
+    """
+    lecturer = make_lecturer(1, mode="single_agent")
+    with db.tenant_tx(lecturer["owner"]) as conn:
+        enqueue_run(
+            conn,
+            owner_id=lecturer["owner"],
+            run_id=lecturer["run"],
+            submission_ids=lecturer["submissions"],
+        )
+
+    from app.agents.models import IndicatorFinding, SingleAgentResult
+    from app.llm.client import Completion
+
+    baseline = SingleAgentResult(
+        level="C4",
+        evidence_quote=ANALYSIS[:30],
+        rationale="alasan contoh yang cukup panjang",
+        findings=[
+            IndicatorFinding(
+                indicator="evaluasi",
+                present=True,
+                strength="kuat",
+                evidence_quote=ANALYSIS[-20:],
+                rationale="alasan contoh yang cukup",
+            )
+        ],
+    )
+
+    class StubProviderClient:
+        def complete_json(self, *, system, user, schema, **_kwargs):
+            assert schema.__name__ == "SingleAgentResult"
+            return Completion(parsed=baseline, raw="{}", latency_ms=9, attempts=1)
+
+    monkeypatch.setattr("app.agents.graph.ProviderClient", StubProviderClient)
+
+    summary = worker.process_run(lecturer["owner"], lecturer["run"])
+
+    assert summary["done"] == 1
+    with db.tenant_tx(lecturer["owner"]) as conn:
+        traces = conn.execute(
+            "select agent_name, latency_ms from agent_traces where run_id = %s", (lecturer["run"],)
+        ).fetchall()
+    names = [name for name, _ in traces]
+    assert names == ["single_agent"], names
+    assert ("single_agent", 9) in traces
+
+    with db.tenant_tx(lecturer["owner"]) as conn:
+        scores = conn.execute(
+            "select dimension from system_scores where run_id = %s", (lecturer["run"],)
+        ).fetchall()
+    assert {row[0] for row in scores} == {"cognitive", "metacognitive"}

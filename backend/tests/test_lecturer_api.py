@@ -15,7 +15,7 @@ from conftest import INDICATORS, LEVEL_NAMES, LEVELS, QUOTE_COGNITIVE
 
 from app import db
 from app.jobs.queue import claim_jobs
-from app.routers.export import COLUMNS
+from app.routers.export import COLUMNS, RESEARCH_COLUMNS
 
 OTHER_LECTURER = {
     "email": "lain@example.ac.id",
@@ -24,11 +24,11 @@ OTHER_LECTURER = {
 }
 
 
-def _run_batch(seeded) -> str:
+def _run_batch(seeded, mode: str = "multi_agent") -> str:
     """Evaluate the seeded batch once and return the run id."""
     client, csrf = seeded["client"], seeded["csrf"]
     created = client.post(
-        f"/assignments/{seeded['assignment']}/runs", headers={"X-CSRF-Token": csrf}
+        f"/assignments/{seeded['assignment']}/runs?mode={mode}", headers={"X-CSRF-Token": csrf}
     )
     assert created.status_code == 201, created.text
     run_id = created.json()["id"]
@@ -454,6 +454,93 @@ def test_a_submission_being_graded_cannot_be_deleted_under_the_worker(seeded):
     response = client.delete(f"/submissions/{seeded['submission']}", headers={"X-CSRF-Token": csrf})
     assert response.status_code == 409, response.text
     assert client.get(f"/submissions/{seeded['submission']}").status_code == 200
+
+
+def test_the_research_export_carries_both_modes_with_the_metadata_to_tell_them_apart(seeded):
+    """FR-16: the thesis joins this file with the two-lecturer rating sheet.
+
+    A per-run file would force a join of files before the join with the sheet, so this one covers the whole
+    assignment with `mode` and the run's own snapshot as columns.
+    """
+    client = seeded["client"]
+    multi = _run_batch(seeded)
+    baseline = _run_batch(seeded, mode="single_agent")
+    score_id = _score_id(seeded["user"], multi, "cognitive")
+    client.post(
+        f"/system_scores/{score_id}/review",
+        json={"action": "override", "new_level": "C5", "reason": "Bukti pembanding."},
+        headers=_csrf(client),
+    )
+
+    response = client.get(f"/assignments/{seeded['assignment']}/research-export.csv")
+    assert response.status_code == 200, response.text
+    rows = list(csv.reader(io.StringIO(response.content.decode("utf-8-sig"))))
+    assert rows[0] == RESEARCH_COLUMNS
+    header = rows[0]
+    by_mode = {
+        row[header.index("mode")]: row
+        for row in rows[1:]
+        if row[header.index("dimension")] == "cognitive"
+    }
+    assert set(by_mode) == {"multi_agent", "single_agent"}, by_mode
+    assert by_mode["multi_agent"][header.index("run_id")] == multi
+    assert by_mode["single_agent"][header.index("run_id")] == baseline
+    assert by_mode["multi_agent"][header.index("review_action")] == "override"
+    assert by_mode["multi_agent"][header.index("review_reason")] == "Bukti pembanding."
+    assert by_mode["single_agent"][header.index("review_action")] == ""
+
+    # `feedback` is scoped to the submission, not the run, so this column reads the run's own synthesis
+    # trace rather than that mutable table — otherwise a later run's feedback (or its absence) would show
+    # up against an earlier run's row.
+    assert by_mode["multi_agent"][header.index("feedback_text")] == (
+        "Perbandingan Anda sudah baik; tambahkan contoh penerapan agar lebih kuat."
+    )
+    assert by_mode["single_agent"][header.index("feedback_text")] == "", "FR-15: baseline has no feedback"
+
+    # The metadata columns come from each run's own snapshot, so the file explains what produced a score.
+    with db.tenant_tx(seeded["user"]) as conn:
+        config = conn.execute(
+            "select model_config from runs where id = %s", (multi,)
+        ).fetchone()[0]
+    assert by_mode["multi_agent"][header.index("model")] == (config.get("model") or "")
+    assert by_mode["multi_agent"][header.index("rubric_version")] == "1"
+    assert by_mode["multi_agent"][header.index("run_status")] == "done"
+
+    # The metacognitive indicators are rows too, one per indicator per mode.
+    indicators = [
+        row[header.index("indicator")] for row in rows[1:] if row[header.index("mode")] == "single_agent"
+    ]
+    assert sorted(indicators) == sorted([*INDICATORS, ""]), indicators
+
+    book = openpyxl.load_workbook(
+        io.BytesIO(client.get(f"/assignments/{seeded['assignment']}/research-export.xlsx").content)
+    )
+    assert [cell.value for cell in book["Scores"][1]] == RESEARCH_COLUMNS
+    assert book["Scores"].max_row - 1 == len(rows) - 1
+
+
+def test_a_baseline_run_does_not_erase_an_earlier_multi_agent_runs_feedback(seeded):
+    """`feedback` is keyed by submission, not by run (no column for it); a baseline run afterwards on the
+    same submission must leave the multi-agent run's own feedback exactly as it was, not clear it for a
+    mode that never writes it.
+    """
+    client = seeded["client"]
+    multi = _run_batch(seeded)
+    before = client.get(f"/runs/{multi}/results").json()["submissions"][0]["feedback_text"]
+    assert before, "the seeded multi-agent run must produce feedback for this test to mean anything"
+
+    _run_batch(seeded, mode="single_agent")
+
+    after = client.get(f"/runs/{multi}/results").json()["submissions"][0]["feedback_text"]
+    assert after == before
+
+
+def test_the_export_is_only_this_lecturers(seeded):
+    """Both export families refuse another lecturer's assignment or run."""
+    other = seeded["client"]
+    other.post("/auth/signup", json=OTHER_LECTURER)
+    assert other.get(f"/assignments/{seeded['assignment']}/research-export.csv").status_code == 404
+    assert other.get(f"/assignments/{seeded['assignment']}/research-export.xlsx").status_code == 404
 
 
 def test_another_lecturer_reaches_nothing(seeded):

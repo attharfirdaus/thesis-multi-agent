@@ -36,7 +36,13 @@ BATCH = 25
 
 #: The Pydantic types the graph writes into its state, and therefore into the checkpoints. LangGraph's
 #: serde needs them named to keep deserialising them across an upgrade; see `_checkpointer`.
-CHECKPOINT_STATE_TYPES = ("CognitiveResult", "MetacognitiveResult", "SynthesisResult", "EvidenceSpan")
+CHECKPOINT_STATE_TYPES = (
+    "CognitiveResult",
+    "MetacognitiveResult",
+    "SynthesisResult",
+    "SingleAgentResult",
+    "EvidenceSpan",
+)
 
 
 def _requeue_stale(conn, *, owner_id: UUID, run_id: UUID) -> None:
@@ -74,7 +80,7 @@ def _load_state(conn, *, owner_id: UUID, run_id: UUID, submission_id: UUID) -> G
         cur.execute(
             """
             select submissions.student_analysis_text, submissions.ai_output_text,
-                   runs.prompt_version_ids,
+                   runs.prompt_version_ids, runs.mode,
                    rubric_versions.version as rubric_version,
                    rubric_versions.dimensions, rubric_versions.levels,
                    rubric_versions.indicators, rubric_versions.descriptors
@@ -102,6 +108,9 @@ def _load_state(conn, *, owner_id: UUID, run_id: UUID, submission_id: UUID) -> G
         owner_id=str(owner_id),
         run_id=str(run_id),
         submission_id=str(submission_id),
+        # Selects the graph `evaluate_submission` runs (FR-15); set once here so the worker's CLI
+        # and the API both route through the same place.
+        mode=row["mode"],
         rubric={
             # The prompt states which rubric version produced the score, so a thesis claim about a
             # past run can be traced to the rubric that was in force (PRD §11).

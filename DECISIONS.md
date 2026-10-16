@@ -7,6 +7,80 @@ Every provider/model/library fact cited in this project carries a source URL and
 
 No model or provider decision remains open. The hosting decisions (O-2, O-3, O-5) were re-taken twice — on 2026-10-07 (VM dropped) and again on 2026-10-14 (Cloud Run dropped for a card-free host) — see the newest entries; the older ones are kept as the record of what was chosen and why it changed. What is still open lives in PRD section 14 — the supervisors' metacognitive rubric, institutional ethics clearance, the validation-subset size, the SUS instrument, the feedback-text format, and how the two synthetic calibration examples are validated. The few-shot calibration itself is settled: Atthar supplied it on 2026-10-15.
 
+## 2026-10-16 (deep night) — FR-15 and FR-16 built, two defects found and fixed in live verification
+
+Built both phase-6 features on top of the plan recorded in the entry below (the same night): the single-agent
+baseline graph plus prompt, and the per-assignment research export. 147 backend tests pass; `ruff`, `mypy`,
+`tsc --noEmit`, `eslint`, `npm run build`, `npm run check:evidence` all clean. Frontend UI (mode choice, the
+baseline's "no feedback" sentence, the research export links, the mode badge) delegated to the `FrontendUi`
+agent per the frozen contract from the prior entry; its diff matched the contract and needed no correction.
+
+Live verification (throwaway account, real Cloudflare Workers AI, both run modes, deleted after) caught two
+defects the written tests had not, both now fixed with a regression test each, mutation-confirmed:
+
+- **The baseline's `agent_traces` carried four rows, not one.** The node correctly reuses the
+  `cognitive`/`metacognitive` shapes for scoring, but the trace-writing loop wrote a row for every shape that
+  loop ever handles, including a `synthesis` row with `error: "agent did not produce output"` for an agent
+  that never runs in this mode — a baseline run's trace looked like three failed calls plus one real one.
+  Fixed by branching the trace-row list on the run's `mode`, not on which fields happen to be set, so a failed
+  baseline call also gets exactly one row with its own error. `backend/app/agents/persist.py`.
+- **Running a baseline after a multi-agent run erased that run's feedback.** `feedback` is keyed by
+  `submission_id`, not `run_id` (no such column) — it was always a "current state for this submission", and
+  every persist call unconditionally deleted it first. That was invisible before FR-15, because only
+  multi-agent runs existed and every one of them both deleted and re-wrote it. A baseline run deletes and
+  writes nothing, so the first multi-agent run's own results screen started showing "no feedback" the moment a
+  baseline ran afterward on the same submission — a real lecturer-facing regression, not just an export
+  artifact. Fixed by skipping the delete when the persisting run's mode is `single_agent`. Verified live:
+  533-character feedback text, unchanged byte-for-byte, after running the baseline on top.
+
+Also fixed, caught the same way: the research export's `feedback_text` column was reading the same
+submission-scoped `feedback` table and so leaked the wrong run's text (or none) onto every row regardless of
+which run actually produced it. `agent_traces.output_json` already carries each run's own synthesis output
+immutably, so the column reads from there instead — correct per run, and it does not reflect a lecturer's
+later edits to the "current" feedback, which is the honest answer given the schema has no per-run feedback to
+edit. Not a schema migration: `feedback` is left exactly as phase 5 built it, still the right table for "what
+should a student read right now".
+
+One process note, not a product decision: the first mutation test used `git checkout -- <file>` to restore a
+deliberately broken line, which discards *all* uncommitted changes to that file — it erased the baseline
+agent's unfinished, uncommitted `persist.py` diff entirely, not just the one planted bug. Recovered by
+rebuilding the file from the untouched sibling files (`graph.py`'s node) rather than re-running the subagent.
+Every mutation test after that restored via a scoped Python string replace instead.
+
+## 2026-10-16 (night) — Phase 5 approved, phase 6 opened: the single-agent baseline and the research export
+
+Atthar said "start phase 6", which is his approval of the phase-5 gate. That gate is a walkthrough with one
+lecturer and no help given; he did it in use rather than in a session — every defect in the entries above came
+from him using the app, and the four UI asks he sent were his walkthrough findings. Recorded as approved by
+his instruction, with that provenance stated rather than dressed up as a formal demo.
+
+Phase 6 scope, from PRD §13 and the two requirements behind it:
+
+- **FR-15, single-agent baseline.** One LLM call over the full rubric covering both dimensions, same model,
+  same rubric version, stored as a separate `Run`. §12 is explicit that the baseline needs no separate path for
+  the cognitive dimension because both modes already use the same model, so this is one call, not two — and the
+  multi-agent justification rests on consistency, per-dimension auditability and error localisation, not on raw
+  accuracy.
+- **FR-16, research export.** System level per mode plus the owning lecturer's override, per submission and
+  dimension, joinable offline with the two-lecturer rating sheet, plus run metadata. Statistics stay in his
+  notebooks (PRD §12), so the app exports data and computes nothing.
+
+Decisions taken up front, to keep the two modes comparable rather than merely present:
+
+- **The baseline writes to the same tables** (`system_scores`, `evidence`, `agent_traces`) so a comparison is a
+  query, not a translation: the same score rows, differing only in their run's `mode`. Its trace is named
+  `single_agent` so an inspection cannot mistake one call for three.
+- **No feedback text in the baseline run.** FR-15 asks for scores; FR-19's feedback is the synthesis agent's
+  output, and inventing a single-agent feedback would make two different things look like one. A baseline run
+  therefore shows grades and no feedback, and the screen says so rather than looking broken.
+- **The research export is per assignment, not per run**, with a `mode` column and the run's status: FR-16 needs
+  both modes side by side for one submission, and a per-run file would force him to join files in the notebook
+  before joining them with the rating sheet. The existing per-run export (FR-12) stays as it is — it answers a
+  different question ("what did this run produce") and is what the lecturer's own review uses.
+- **Run-to-run variance (PRD §11) is still unassigned.** It is a research feature, so phase 6 is where it would
+  fit, but the question in PRD §14 is unanswered and it changes run semantics; it is not in this scope unless
+  he says so. Recording it here so its absence is a decision rather than an oversight.
+
 ## 2026-10-16 (evening) — Grading only what is new, as a choice rather than a default
 
 Atthar asked for the app to grade only submissions it has not graded yet. Delivered as

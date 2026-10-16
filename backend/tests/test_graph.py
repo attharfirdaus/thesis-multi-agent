@@ -20,6 +20,7 @@ from app.agents.graph import (
     COGNITIVE_FAILED,
     EVIDENCE_UNVERIFIED,
     NEEDS_REVIEW,
+    SINGLE_AGENT_FAILED,
     SYNTHESIS_FAILED,
     SYNTHESIS_RETRIED,
     evaluate_submission,
@@ -28,6 +29,7 @@ from app.agents.models import (
     CognitiveResult,
     IndicatorFinding,
     MetacognitiveResult,
+    SingleAgentResult,
     SynthesisResult,
 )
 from app.llm.client import Completion
@@ -91,6 +93,25 @@ def synthesis_result() -> SynthesisResult:
     )
 
 
+def single_agent_result(
+    cognitive_quote: str = COGNITIVE_QUOTE, metacognitive_quote: str = METACOGNITIVE_QUOTE
+) -> SingleAgentResult:
+    return SingleAgentResult(
+        level="C4",
+        evidence_quote=cognitive_quote,
+        rationale="Analisis mahasiswa membandingkan dua sumber.",
+        findings=[
+            IndicatorFinding(
+                indicator="evaluasi",
+                present=True,
+                strength="kuat",
+                evidence_quote=metacognitive_quote,
+                rationale="Mahasiswa memeriksa ulang data yang dipakai model.",
+            )
+        ],
+    )
+
+
 def make_state(**overrides: object) -> dict:
     state: dict = {
         "owner_id": "owner-1",
@@ -128,7 +149,12 @@ def prompt_calls(monkeypatch):
 
         return build
 
-    for name in ("cognitive_prompt", "metacognitive_prompt", "synthesis_prompt"):
+    for name in (
+        "cognitive_prompt",
+        "metacognitive_prompt",
+        "synthesis_prompt",
+        "single_agent_prompt",
+    ):
         monkeypatch.setattr(prompts, name, builder(name.removesuffix("_prompt")))
     return seen
 
@@ -262,3 +288,73 @@ def test_an_indicator_without_a_quote_is_not_an_evidence_failure(prompt_calls):
 def test_build_graph_compiles_without_a_client():
     """The production entry point builds its own client; a caller may inject one (JobQueue does)."""
     assert graph.build_graph() is not None
+
+
+def test_single_agent_mode_calls_once_and_scores_both_dimensions(prompt_calls):
+    """FR-15: one call, split into the same two shapes the multi-agent path produces."""
+    client = StubClient({SingleAgentResult: single_agent_result()})
+
+    result = evaluate_submission(make_state(mode="single_agent"), client)
+
+    assert calls_for(client, SingleAgentResult) == 1
+    assert result["cognitive"].level == "C4"
+    assert result["metacognitive"].findings[0].indicator == "evaluasi"
+    # No synthesis call happened, and the trace must not look like three calls.
+    assert result["latencies"] == {"single_agent": 1}
+    assert calls_for(client, SynthesisResult) == 0
+    assert result["single_agent"] is not None
+    assert {span.source for span in result["evidence"]} == {"cognitive", "metacognitive"}
+    assert result.get("flags", []) == []
+
+
+def test_single_agent_mode_refuses_an_uncalibrated_run(monkeypatch):
+    def refuse(**_: object) -> tuple[str, str]:
+        raise prompts.MissingCalibration("calibration examples are empty")
+
+    monkeypatch.setattr(prompts, "single_agent_prompt", refuse)
+    client = StubClient({})
+
+    with pytest.raises(prompts.MissingCalibration):
+        evaluate_submission(make_state(mode="single_agent"), client)
+
+    assert client.calls == []
+
+
+def test_single_agent_mode_flags_an_unfindable_quote_without_retrying(prompt_calls):
+    """No synthesis step exists to retry in this mode: an unverifiable quote is flagged once, the
+    same way the multi-agent path flags a failed retry, never retried (PRD §6, baseline scope)."""
+    client = StubClient({SingleAgentResult: single_agent_result(cognitive_quote=PARAPHRASE)})
+
+    result = evaluate_submission(make_state(mode="single_agent"), client)
+
+    assert calls_for(client, SingleAgentResult) == 1
+    assert EVIDENCE_UNVERIFIED in result["flags"]
+    assert NEEDS_REVIEW in result["flags"]
+    assert SYNTHESIS_RETRIED not in result["flags"]
+    assert result["cognitive"].evidence_quote == PARAPHRASE
+    assert result["evidence_failures"] == [f"cognitive: {PARAPHRASE}"]
+
+
+def test_single_agent_failure_flags_both_dimensions(prompt_calls):
+    client = StubClient({SingleAgentResult: RuntimeError("provider unreachable")})
+
+    result = evaluate_submission(make_state(mode="single_agent"), client)
+
+    assert result["cognitive"] is None
+    assert result["metacognitive"] is None
+    assert SINGLE_AGENT_FAILED in result["flags"]
+    assert any("provider unreachable" in message for message in result["errors"])
+
+
+def test_build_single_agent_graph_compiles_without_a_client():
+    assert graph.build_single_agent_graph() is not None
+
+
+def test_evaluate_submission_defaults_to_multi_agent_when_mode_is_absent(prompt_calls):
+    """State built before the baseline existed carries no `mode` key at all."""
+    client = StubClient(full_plan())
+
+    result = evaluate_submission(make_state(), client)
+
+    assert result["synthesis"] is not None
+    assert calls_for(client, SingleAgentResult) == 0

@@ -98,6 +98,8 @@ export type RunSummary = {
   status: string;
   jobs: JobCounts;
   in_flight?: RunInFlight[];
+  /** `multi_agent` or `single_agent`; the list endpoint's `latest_run` omits it, the run endpoints send it. */
+  mode?: string;
 };
 
 export type AssignmentSummary = {

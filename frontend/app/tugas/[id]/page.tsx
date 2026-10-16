@@ -12,7 +12,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { api, type AssignmentDetail, type ImportedFile, type RunSummary, type SubmissionSummary } from "@/lib/api";
-import { flagSentences, warningSentences } from "@/lib/labels";
+import { flagSentences, modeLabel, warningSentences } from "@/lib/labels";
 
 /** Jobs per request: one call must not sit on the whole batch, and the page shows progress between calls. */
 const PROCESS_CHUNK = 2;
@@ -45,6 +45,18 @@ function duration(seconds: number): string {
   const minutes = Math.floor(seconds / 60);
   const rest = seconds % 60;
   return minutes === 0 ? `${rest} detik` : `${minutes} menit ${rest} detik`;
+}
+
+/** What the lecturer is about to spend quota on, in the wording the two choices deserve. */
+function startQuestion(mode: string, onlyUngraded: boolean, ungradedCount: number): string {
+  if (mode === "single_agent") {
+    return onlyUngraded
+      ? `Jalankan baseline untuk ${ungradedCount} kiriman yang belum dinilai? Hasil penilaian yang sudah ada tidak berubah.`
+      : "Jalankan penilaian baseline lagi? Layar hasil akan menampilkan penilaian terbaru.";
+  }
+  return onlyUngraded
+    ? `Nilai ${ungradedCount} kiriman yang belum dinilai? Hasil penilaian yang sudah ada tidak berubah.`
+    : "Jalankan penilaian lagi? Layar hasil akan menampilkan penilaian terbaru.";
 }
 
 /** The English exception text and the stored caveats, kept for the developer rather than the lecturer. */
@@ -89,6 +101,8 @@ export default function TugasPage() {
   const [deletingId, setDeletingId] = useState<string | null>(null);
   // The owner's default: a run spends quota on what has no result yet (PRD §11 keeps re-grading as a choice).
   const [onlyUngraded, setOnlyUngraded] = useState(true);
+  // The thesis compares both modes, so the baseline is a choice beside the scope, never the cheaper default.
+  const [runMode, setRunMode] = useState<"multi_agent" | "single_agent">("multi_agent");
   const fileInput = useRef<HTMLInputElement>(null);
   const drivingRun = useRef<string | null>(null);
   const resumedRun = useRef<string | null>(null);
@@ -261,12 +275,10 @@ export default function TugasPage() {
     starting.current = true;
     try {
       // Only re-grading replaces the results a lecturer is already reading, so only it warns about that.
-      const question = onlyUngraded
-        ? `Nilai ${ungradedCount} kiriman yang belum dinilai? Hasil penilaian yang sudah ada tidak berubah.`
-        : "Jalankan penilaian lagi? Layar hasil akan menampilkan penilaian terbaru.";
+      const question = startQuestion(runMode, onlyUngraded, ungradedCount);
       if (run && !window.confirm(question)) return;
       setError(null);
-      const created = await api.createRun(id, "multi_agent", onlyUngraded);
+      const created = await api.createRun(id, runMode, onlyUngraded);
       setRun(created);
       resumedRun.current = created.id;
       await drive(created.id);
@@ -490,45 +502,81 @@ export default function TugasPage() {
 
               {/* The scope decides what the primary button spends quota on, so it sits directly above it. */}
               {unfinishedRunId === null && !driving ? (
-                <fieldset className="flex flex-col gap-2">
-                  <legend className="text-sm font-medium">Kiriman yang dinilai</legend>
-                  <div className="flex items-start gap-2">
-                    <input
-                      id="scope_ungraded"
-                      type="radio"
-                      name="run_scope"
-                      className="mt-1"
-                      checked={onlyUngraded}
-                      onChange={() => setOnlyUngraded(true)}
-                    />
-                    <Label htmlFor="scope_ungraded" className="cursor-pointer">
-                      Hanya kiriman yang belum dinilai
-                    </Label>
-                  </div>
-                  <div className="flex items-start gap-2">
-                    <input
-                      id="scope_all"
-                      type="radio"
-                      name="run_scope"
-                      className="mt-1"
-                      checked={!onlyUngraded}
-                      onChange={() => setOnlyUngraded(false)}
-                    />
-                    <Label htmlFor="scope_all" className="cursor-pointer">
-                      Nilai ulang semua kiriman (termasuk yang sudah ada nilainya)
-                    </Label>
-                  </div>
-                  <p className="text-sm text-muted-foreground">
-                    {onlyUngraded
-                      ? `${ungradedCount} kiriman akan dinilai, ${gradedCount} sudah dinilai.`
-                      : `Semua ${detail?.submission_count ?? 0} kiriman akan dinilai ulang.`}
-                  </p>
-                  {onlyUngraded && flaggedCount > 0 ? (
-                    <p className="text-sm text-muted-foreground">
-                      {flaggedCount} kiriman perlu ditinjau dan tidak akan dinilai ulang dengan pilihan ini.
+                <div className="flex flex-col gap-4 sm:flex-row sm:gap-10">
+                  <fieldset className="flex flex-col gap-2">
+                    <legend className="text-sm font-medium">Mode penilaian</legend>
+                    <div className="flex items-start gap-2">
+                      <input
+                        id="mode_multi"
+                        type="radio"
+                        name="run_mode"
+                        className="mt-1"
+                        checked={runMode === "multi_agent"}
+                        onChange={() => setRunMode("multi_agent")}
+                      />
+                      <Label htmlFor="mode_multi" className="cursor-pointer">
+                        {modeLabel("multi_agent")}
+                      </Label>
+                    </div>
+                    <div className="flex items-start gap-2">
+                      <input
+                        id="mode_single"
+                        type="radio"
+                        name="run_mode"
+                        className="mt-1"
+                        checked={runMode === "single_agent"}
+                        onChange={() => setRunMode("single_agent")}
+                      />
+                      <Label htmlFor="mode_single" className="cursor-pointer">
+                        {modeLabel("single_agent")}
+                      </Label>
+                    </div>
+                    <p className="max-w-md text-sm text-muted-foreground">
+                      Baseline single-agen menilai seluruh rubrik sekaligus dan dipakai untuk perbandingan
+                      pada penelitian, bukan sebagai cara menilai yang lebih hemat.
                     </p>
-                  ) : null}
-                </fieldset>
+                  </fieldset>
+
+                  <fieldset className="flex flex-col gap-2">
+                    <legend className="text-sm font-medium">Kiriman yang dinilai</legend>
+                    <div className="flex items-start gap-2">
+                      <input
+                        id="scope_ungraded"
+                        type="radio"
+                        name="run_scope"
+                        className="mt-1"
+                        checked={onlyUngraded}
+                        onChange={() => setOnlyUngraded(true)}
+                      />
+                      <Label htmlFor="scope_ungraded" className="cursor-pointer">
+                        Hanya kiriman yang belum dinilai
+                      </Label>
+                    </div>
+                    <div className="flex items-start gap-2">
+                      <input
+                        id="scope_all"
+                        type="radio"
+                        name="run_scope"
+                        className="mt-1"
+                        checked={!onlyUngraded}
+                        onChange={() => setOnlyUngraded(false)}
+                      />
+                      <Label htmlFor="scope_all" className="cursor-pointer">
+                        Nilai ulang semua kiriman (termasuk yang sudah ada nilainya)
+                      </Label>
+                    </div>
+                    <p className="text-sm text-muted-foreground">
+                      {onlyUngraded
+                        ? `${ungradedCount} kiriman akan dinilai, ${gradedCount} sudah dinilai.`
+                        : `Semua ${detail?.submission_count ?? 0} kiriman akan dinilai ulang.`}
+                    </p>
+                    {onlyUngraded && flaggedCount > 0 ? (
+                      <p className="text-sm text-muted-foreground">
+                        {flaggedCount} kiriman perlu ditinjau dan tidak akan dinilai ulang dengan pilihan ini.
+                      </p>
+                    ) : null}
+                  </fieldset>
+                </div>
               ) : null}
 
               <div className="flex flex-wrap items-center gap-3">
@@ -544,9 +592,9 @@ export default function TugasPage() {
                     ? "Penilaian sedang berjalan…"
                     : unfinishedRunId !== null
                       ? "Lanjutkan penilaian"
-                      : onlyUngraded
-                        ? "Nilai kiriman baru"
-                        : "Nilai ulang semua kiriman"}
+                      : `${onlyUngraded ? "Nilai kiriman baru" : "Nilai ulang semua kiriman"}${
+                          runMode === "single_agent" ? " (baseline)" : ""
+                        }`}
                 </Button>
                 {cancelTargetId !== null ? (
                   <Button

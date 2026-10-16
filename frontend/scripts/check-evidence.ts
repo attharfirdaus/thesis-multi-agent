@@ -19,6 +19,7 @@ import {
   FLAG_SENTENCES,
   flagSentences,
   levelLabel,
+  modeLabel,
   scoreLevel,
   STRENGTH_WORDS,
   warningSentence,
@@ -158,6 +159,12 @@ assert.deepEqual([...backendStrengths].sort(), [...STRENGTH_WORDS].sort());
 for (const word of backendStrengths) {
   assert.equal(scoreLevel(word, ["C1", "C4"]), word, `${word} must reach the lecturer as itself`);
 }
+
+// 10c. the two run modes read as their names, and no mode value leaks as an identifier
+assert.equal(modeLabel("multi_agent"), "Multi-agen");
+assert.equal(modeLabel("single_agent"), "Baseline single-agen");
+assert.equal(modeLabel("multi_agent").includes("_"), false);
+assert.equal(modeLabel("single_agent").includes("_"), false);
 
 // 10b. the rubric's name sits beside the code, and a code the rubric does not name stands alone
 assert.equal(levelLabel("C4", { C1: "Remember", C4: "Analyze", C6: "Create" }), "C4 Analyze");

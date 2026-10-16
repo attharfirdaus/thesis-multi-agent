@@ -14,6 +14,7 @@ from app.agents.prompts import (
     MissingCalibration,
     cognitive_prompt,
     metacognitive_prompt,
+    single_agent_prompt,
     synthesis_prompt,
 )
 from scripts.seed_rubric import _calibration_from, rubric_content, version_to_insert
@@ -118,6 +119,26 @@ def test_synthesis_retry_carries_the_evidence_failure_reason():
     _, retry = synthesis_prompt(RUBRIC, {}, {}, ANALYSIS, AI_OUTPUT, retry_reason=reason)
     assert reason not in first
     assert reason in retry
+
+
+def test_single_agent_prompt_carries_the_full_rubric_and_both_calibration_blocks():
+    system, user = single_agent_prompt(RUBRIC, CALIBRATION, ANALYSIS)
+    assert RUBRIC["levels"][4] in user
+    assert "elaborasi" in user and "evaluasi" in user
+    assert "kalibrasi-contoh-alasan" in user
+    assert ANALYSIS in user
+    # One judgement task: the schema carries the level and the findings together.
+    assert "evidence_quote" in system
+    assert "findings" in system
+
+
+@pytest.mark.parametrize(
+    "calibration",
+    [{}, {"cognitive": CALIBRATION["cognitive"]}, {"metacognitive": CALIBRATION["metacognitive"]}],
+)
+def test_single_agent_prompt_refuses_without_both_calibration_blocks(calibration):
+    with pytest.raises(MissingCalibration):
+        single_agent_prompt(RUBRIC, calibration, ANALYSIS)
 
 
 def test_seeder_version_rule_skips_identical_content_and_bumps_changed_content():

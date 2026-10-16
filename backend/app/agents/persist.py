@@ -17,6 +17,7 @@ admits only the two scoring agents.
 from uuid import UUID
 
 from psycopg.types.json import Jsonb
+from pydantic import BaseModel
 
 from app.agents.models import GraphState, MetacognitiveResult, SynthesisResult
 
@@ -55,7 +56,12 @@ def persist_submission_result(
     counts = {"traces": 0, "scores": 0, "evidence": 0}
 
     with conn.cursor() as cur:
-        cur.execute("delete from feedback where submission_id = %s", (submission_id,))
+        # A baseline run produces no feedback (FR-15) and must not touch what a multi-agent run on the
+        # same submission already wrote: `feedback` is keyed by submission, not by run, so deleting it
+        # here would erase a real result the lecturer can still see and edit, for a mode that has nothing
+        # to replace it with.
+        if state.get("mode") != "single_agent":
+            cur.execute("delete from feedback where submission_id = %s", (submission_id,))
         cur.execute(
             "delete from system_scores where run_id = %s and submission_id = %s",
             (run_id, submission_id),
@@ -65,11 +71,22 @@ def persist_submission_result(
             (run_id, submission_id),
         )
 
-        for agent, payload in (
-            ("cognitive", cognitive),
-            ("metacognitive", metacognitive),
-            ("synthesis", synthesis),
-        ):
+        # The baseline's one call gets exactly one trace row (FR-15), including on failure:
+        # `cognitive`/`metacognitive` are pieces reconstructed from that single answer for scoring, not
+        # separate calls, and `synthesis` never runs in this mode, so neither belongs in the trace — a row
+        # for either would misrepresent the baseline as having made calls it never made. Branching on
+        # `mode` rather than on whether `single_agent` is set keeps a failed baseline call's error on the
+        # one row it belongs to instead of spreading it across three rows for agents that never ran.
+        agent_payloads: list[tuple[str, BaseModel | None]] = (
+            [("single_agent", state.get("single_agent"))]
+            if state.get("mode") == "single_agent"
+            else [
+                ("cognitive", cognitive),
+                ("metacognitive", metacognitive),
+                ("synthesis", synthesis),
+            ]
+        )
+        for agent, payload in agent_payloads:
             cur.execute(
                 "insert into agent_traces "
                 "(owner_id, run_id, submission_id, agent_name, output_json, latency_ms, error) "
