@@ -244,7 +244,6 @@ def test_a_failing_graph_counts_attempts_and_fails_at_the_cap(monkeypatch):
         summary = worker.process_run(lecturer["owner"], lecturer["run"])
         assert summary["claimed"] == 1
         assert summary[bucket] == 1
-        assert summary["states"] == []
         job = job_rows(lecturer["owner"], lecturer["run"])[0]
         assert (job["attempts"], job["status"]) == (attempt, status)
         assert job["last_error"].startswith("ValueError: model mengembalikan JSON")
@@ -288,7 +287,14 @@ def test_summary_counts_a_mixed_batch(monkeypatch):
         for state in seen
     )
     assert all(state["prompts"] == {"calibration": CALIBRATION} for state in seen)
-    assert {state["submission_id"] for state in summary["states"]} == {
+    # Which submissions this pass actually graded, read from the queue rather than from a returned list:
+    # the failed one stays queued, and the pass reports counts only.
+    with db.tenant_tx(lecturer["owner"]) as conn:
+        graded = conn.execute(
+            "select submission_id from jobs where run_id = %s and status = 'done'",
+            (lecturer["run"],),
+        ).fetchall()
+    assert {str(row[0]) for row in graded} == {
         str(submission) for submission in lecturer["submissions"][1:]
     }
     assert [job["status"] for job in job_rows(lecturer["owner"], lecturer["run"])] == [

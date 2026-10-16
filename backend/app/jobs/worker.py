@@ -218,7 +218,6 @@ def _run_one(owner_id: UUID, job: dict, summary: dict, checkpointer=None) -> Non
 
     _finish(owner_id, job, result)
     summary["done"] += 1
-    summary["states"].append(result)
 
 
 def process_run(owner_id: UUID, run_id: UUID, limit: int | None = None) -> dict:
@@ -229,11 +228,11 @@ def process_run(owner_id: UUID, run_id: UUID, limit: int | None = None) -> dict:
     that needs three attempts therefore needs three passes, so an offline provider cannot burn a
     whole batch's retries in one call.
 
-    Returns `claimed`, `done`, `failed` (out of retries), `skipped` (failed, will be retried) and
-    `states`, the final `GraphState` of each finished submission for the caller to persist. The
-    first three plus `skipped` always add up to `claimed`.
+    Returns `claimed`, `done`, `failed` (out of retries) and `skipped` (failed, will be retried). The first
+    three plus `skipped` always add up to `claimed`. Results are stored by `_finish` as each job completes,
+    not returned: the caller has nothing left to persist.
     """
-    summary: dict = {"claimed": 0, "done": 0, "failed": 0, "skipped": 0, "states": []}
+    summary: dict = {"claimed": 0, "done": 0, "failed": 0, "skipped": 0}
     with db.tenant_tx(owner_id) as conn:
         _requeue_stale(conn, owner_id=owner_id, run_id=run_id)
         jobs = claim_jobs(
