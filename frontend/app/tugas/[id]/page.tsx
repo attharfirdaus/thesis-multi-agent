@@ -102,9 +102,10 @@ export default function TugasPage() {
           setDetail(data);
           // Keep the run being driven on screen, but take the API's counters: deleting a submission
           // removes its job rows, so the counts on display are not the ones the run started with.
-          setRun((current) =>
-            current?.id === data.latest_run?.id ? { ...current, ...data.latest_run } : data.latest_run,
-          );
+          setRun((current) => {
+            if (data.latest_run === null) return null;
+            return current?.id === data.latest_run.id ? { ...current, ...data.latest_run } : data.latest_run;
+          });
         },
         (err: unknown) => setError(err instanceof Error ? err.message : "Gagal memuat tugas."),
       ),
@@ -541,6 +542,9 @@ export default function TugasPage() {
                         <th scope="col" className="py-2 font-medium">
                           Catatan impor
                         </th>
+                        <th scope="col" className="py-2 pl-4 font-medium">
+                          Tindakan
+                        </th>
                       </tr>
                     </thead>
                     <tbody>
@@ -578,6 +582,17 @@ export default function TugasPage() {
                             ) : (
                               "—"
                             )}
+                          </td>
+                          <td className="py-2 pl-4">
+                            <Button
+                              variant="destructive"
+                              size="sm"
+                              aria-label={`Hapus kiriman ${submission.pseudonym}`}
+                              disabled={deletingId !== null}
+                              onClick={() => void onDelete(submission)}
+                            >
+                              {deletingId === submission.id ? "Menghapus…" : "Hapus"}
+                            </Button>
                           </td>
                         </tr>
                       ))}

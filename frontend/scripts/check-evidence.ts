@@ -14,7 +14,14 @@ import { fileURLToPath } from "node:url";
 
 import type { Evidence, Score } from "../lib/api.ts";
 import { buildSegments, combinedDocument } from "../lib/evidence.ts";
-import { FLAG_FALLBACK, FLAG_SENTENCES, flagSentences, scoreLevel, warningSentence } from "../lib/labels.ts";
+import {
+  FLAG_FALLBACK,
+  FLAG_SENTENCES,
+  flagSentences,
+  scoreLevel,
+  warningSentence,
+  warningSentences,
+} from "../lib/labels.ts";
 
 /** The flag tokens live with the agents that write them; the scan reads them rather than a copy. */
 const AGENT_SOURCES = fileURLToPath(new URL("../../backend/app/agents/", import.meta.url));
@@ -149,5 +156,24 @@ assert.equal(
 const unknownWarning = warningSentence("Some unexpected extractor note.");
 assert.notEqual(unknownWarning, "Some unexpected extractor note.");
 assert.equal(unknownWarning.includes("extractor"), false);
+
+// 11b. the two stored phrasings of one caveat render as one sentence, and two facts stay two
+assert.deepEqual(
+  warningSentences([
+    "no AI segment was detected; the student's analysis covers the whole document",
+    "No AI-output segment was detected; the whole document was treated as the student's analysis.",
+    "no AI segment was detected; the student's analysis covers the whole document",
+  ]),
+  ["Bagian keluaran AI tidak terdeteksi, sehingga seluruh dokumen dibaca sebagai analisis mahasiswa."],
+);
+assert.equal(warningSentences([]).length, 0);
+assert.equal(
+  warningSentences([
+    "page 2: no extractable text or tables (image-only page)",
+    "page 3: no extractable text or tables (image-only page)",
+    "page 2: no extractable text or tables (image-only page)",
+  ]).length,
+  2,
+);
 
 console.log(`check-evidence: all assertion groups passed (${backendFlags.size} backend flag tokens)`);
