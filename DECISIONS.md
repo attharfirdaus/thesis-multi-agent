@@ -24,6 +24,13 @@ than anywhere else, because the rows a lecturer can no longer see are still rows
 - Verification: 128 backend tests (three new — the cascade reaching every dependent table and the run's own
   results view, the 409 while a job is in flight, and the single warning below), each of the two new guards
   proven to fail when its behaviour is removed.
+- **The UI half landed and was verified live** (throwaway account, real backend): a `Tindakan` column with one
+  destructive control per row whose accessible name carries the pseudonym, a confirmation naming what
+  disappears and that it is final, the endpoint's Indonesian 409 shown verbatim with the row kept, and on
+  success the row gone with "Kiriman S-… beserta nilainya sudah dihapus." — the card's count moving from 2 to
+  1 kiriman. The delete also forced a real fix: `load()` reused the run object it already held when the ids
+  matched, so the run's counters would have gone stale after a delete, since a submission's job rows cascade
+  with it; it now takes the API's fresh status and counters.
 
 **And a bug his screenshot showed: the same sentence twice in one cell.** "Bagian keluaran AI tidak
 terdeteksi…" appeared twice for two submissions. Root cause was in the data, not the screen: the segmenter

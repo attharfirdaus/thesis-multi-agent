@@ -25,7 +25,7 @@ the failure is a generic sentence, never an English one.
 | Route | What it is | Requirements |
 | --- | --- | --- |
 | `/dasbor` | Assignment list with submission count and the newest run's state; create form; empty state naming the next step | FR-02 |
-| `/tugas/[id]` | Upload (multi-file, per-file result), submission table with status flags, the evaluate control (create run → process in chunks → poll until done), progress from job counts, and resume-after-reload | FR-03, FR-06 |
+| `/tugas/[id]` | Upload (multi-file, per-file result), submission table with status flags and one destructive delete per row, the evaluate control (create run → process in chunks → poll until done), progress from job counts, and resume-after-reload | FR-03, FR-06 |
 | `/tugas/[id]/hasil` | Results table: sortable pseudonym / cognitive level / review column, filter by level, `Perlu Ditinjau` badge, and the two export links | FR-09, FR-12 |
 | `/kiriman/[id]` | Split view: the student's analysis with every evidence span highlighted in place, per-score cards with the agent's rationale and its quoted evidence, the override control, the feedback editor, and the boundary correction | FR-05, FR-10, FR-11, FR-14, FR-19 |
 
@@ -152,6 +152,9 @@ lecturer UI receives, which is the point of FR-04.
   creates a *new* run with its own snapshot; the results screen then shows the newest run. A lecturer-facing
   "retry this dimension" is not in the PRD and was not invented here, but the gap is real and the workaround
   is not obvious, so it belongs in the record.
+- **Deleting an assignment is not built.** Deleting a submission is (one row, everything derived from it
+  cascades, refused while it is still queued or being graded). One click that takes a whole class is not
+  something to invent without a requirement, and none covers it.
 - **`feedback.exported_at` is never written.** The column exists in PRD §10 but no requirement says when it
   should be stamped, and stamping it on a GET would give a read request a side effect. Raised as a
   micro-decision rather than guessed.
