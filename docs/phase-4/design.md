@@ -150,7 +150,10 @@ submissions, no stub:
   submission was flagged `cognitive_agent_failed`, its metacognitive findings were stored, and the run
   finished `done` with `needs_review = 1`.
 - **Latency is the binding cost, not correctness:** 19.98–85.77 s per call, mean 44.47 s, 13.5 minutes for
-  four submissions. That is the number PRD §11's performance target has to be set from.
+  four submissions. That is the number PRD §11's performance target has to be set from. **Superseded
+  2026-10-16:** most of that time was the model deliberating, not the provider serving — the model is a
+  reasoning model and the request did not disable thinking, so the same calls now answer in 1.5–8 s. The new
+  numbers, the mechanism and the fix are in DECISIONS.md; PRD §11's target should be re-derived from them.
 - **`exact` string equality is the wrong evidence metric.** Three quotes were stored and all three were
   located, but none matched the stored text character for character: the differences were line breaks, and
   the normalised comparison was equal in all three cases. A paraphrase would fail both tests, which is

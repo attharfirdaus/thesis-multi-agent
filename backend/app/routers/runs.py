@@ -51,6 +51,9 @@ def _model_config() -> dict:
         # score at all: a dimension that failed on three timeouts is only explicable if the run says
         # what the budget was (FR-13 asks for the parameters, and this one changed after 2026-10-16).
         "timeout_seconds": settings.llm_timeout_seconds,
+        # Bounds the answer's length, and a truncated answer is a failed attempt rather than a score,
+        # so a run cannot be reproduced without it.
+        "max_tokens": settings.llm_max_tokens,
     }
 
 

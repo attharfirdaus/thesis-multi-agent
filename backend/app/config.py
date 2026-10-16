@@ -51,6 +51,11 @@ class Settings(BaseSettings):
     # this is the total number of attempts, not the number of retries.
     llm_max_attempts: int = Field(default=3, alias="LLM_MAX_ATTEMPTS")
     llm_timeout_seconds: float = Field(default=120, alias="LLM_TIMEOUT_SECONDS")
+    # A hard ceiling on generated tokens. Without one, generation is unbounded: asked to score a
+    # 9k-character analysis on 2026-10-16, the model emitted for more than 300 seconds and produced
+    # nothing, while the same prompt with a cap answered in 8 seconds. Legitimate answers measured on
+    # real submissions are 750–1,046 characters (~200–260 tokens), so this leaves ~4x headroom.
+    llm_max_tokens: int = Field(default=1024, alias="LLM_MAX_TOKENS")
 
     @property
     def is_production(self) -> bool:

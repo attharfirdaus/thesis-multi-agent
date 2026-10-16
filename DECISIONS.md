@@ -7,6 +7,78 @@ Every provider/model/library fact cited in this project carries a source URL and
 
 No model or provider decision remains open. The hosting decisions (O-2, O-3, O-5) were re-taken twice — on 2026-10-07 (VM dropped) and again on 2026-10-14 (Cloud Run dropped for a card-free host) — see the newest entries; the older ones are kept as the record of what was chosen and why it changed. What is still open lives in PRD section 14 — the supervisors' metacognitive rubric, institutional ethics clearance, the validation-subset size, the SUS instrument, the feedback-text format, and how the two synthetic calibration examples are validated. The few-shot calibration itself is settled: Atthar supplied it on 2026-10-15.
 
+## 2026-10-16 — First real use: four defects found and fixed
+
+Context: Atthar ran the app on his own account — one assignment ("ISO"), one submission (the 9,155-character
+ISO 31000 analysis from `samples/`), and he pressed Evaluate twice, three minutes apart. No test in the suite
+would have found any of the four; they needed a person, a real provider and a real database.
+
+1. **A job claim could cross runs.** `claim_jobs` filtered by owner, not by run, so `POST /runs/A/process`
+   could execute run B's job and persist its scores under **run A's** rubric, prompts and model snapshot.
+   The run is the unit the thesis traces a score back to, so that quietly corrupts the research record —
+   and it is what let two runs score the same submission at once. Fixed with a `run_id` predicate; the new
+   test fails when the filter is neutralised (checked by mutation, since a green test proves nothing about
+   what it binds). `_requeue_stale` was already run-scoped, which is what made the old behaviour incoherent.
+2. **The screen could start a second run and showed no sign of life.** PRD §9 says long work never blocks
+   the screen and must show progress; the page did neither. The controls now resume an unfinished run rather
+   than create another (with a ref guard against a double press), show an indeterminate bar plus elapsed
+   seconds while a request is in flight, and stay enabled when a lease is stale — because a stale `running`
+   job disables the only control that could clear it, and `_requeue_stale` is only reached through that
+   control. Self-healing on load closes the same loop after a crash or a closed tab.
+3. **Neon closed an idle connection and the API answered 500** with `SSL connection has been closed
+   unexpectedly` on `/auth/me`. The pool now checks a connection on checkout. **Stated plainly: this is
+   `[UNVERIFIED]` locally** — local Postgres closes a connection in a way psycopg_pool already detects, so
+   the silent death cannot be reproduced here. A test was written for it, found to pass with *and* without
+   the guard, and deleted rather than kept as false coverage. The evidence is the documented remedy for
+   exactly this failure plus the absence of those 500s in use.
+4. **A failure recorded neither of the two numbers that explain it.** An agent that failed left
+   `latency_ms` null (the client reports a latency only for a call that returned), and the run snapshot did
+   not record the timeout budget that decided whether the dimension got a chance at all. Both are now
+   recorded; the failure path measures its own duration, which is the number that says the provider is sick.
+
+**The failure itself, observed twice:** the cognitive agent timed out three times on that 9,155-character
+analysis — the *same document* that timed out for the cognitive agent in my 2026-10-15 gate run — while the
+metacognitive (30 s) and synthesis (39 s) calls on it succeeded. So this is document-dependent and
+reproducible, not noise, and it is the first real constraint on the PRD §11 performance claim: a free-tier
+provider asked to score a 9k-character Indonesian analysis with a 4k-character calibration block does not
+reliably answer inside the 120-second budget that was configured.
+
+**Measured, rather than assumed: raising the budget is not the fix.** The same prompt (16,530 characters)
+was sent again with one attempt and a **300-second** timeout, and it timed out again at 300.1 s — no
+response, not a slow response.
+
+**Root cause: the configured model is a reasoning model, and its deliberation was eating the whole token
+budget.** With no `max_tokens` in the request, generation is unbounded. With one, the response came back in
+8.2 s with `finish_reason: length`, **empty `content`**, and 1,024 tokens of `reasoning`; at 4,096 tokens it
+spent 67.6 s deliberating and still returned empty content. The answer lives in `content`, the deliberation
+in `reasoning`, and they share the budget — so the cognitive agent could never answer. The metacognitive and
+synthesis calls only succeeded because their prompts happened to stop deliberating in time.
+
+**The fix is one request field, and which one was measured rather than assumed.** Sent to the real endpoint,
+same prompt, 512-token cap:
+
+| Parameter | Result |
+| --- | --- |
+| `reasoning_effort: "none"` | accepted and **ignored** — `finish_reason: length`, 1,900 reasoning characters, empty content |
+| `reasoning_effort: "minimal"` | accepted and **ignored** — 2,020 reasoning characters, empty content |
+| `thinking: false` | accepted and **ignored** — 2,135 reasoning characters, empty content |
+| `reasoning: {"effort": "none"}` | accepted and **ignored** — 1,880 reasoning characters, empty content |
+| **`chat_template_kwargs: {"enable_thinking": false}`** | **`finish_reason: stop`, 427 characters of valid JSON, zero reasoning, 5.7 s** |
+
+The client now sends that field, `max_tokens` is capped at 1,024 (real answers measure 750–1,046 characters,
+so there is ~4× headroom), and both are recorded in the run's snapshot because they decide whether a
+dimension can be scored at all. **Verified end to end on the owner's own submission:** the cognitive call
+that never returned now answers in **1.5 s** with one attempt — level C2, a verbatim quote, and an Indonesian
+rationale.
+
+**What this changes beyond the bug.** The 20–86 s latencies recorded during the phase-4 gate were mostly
+deliberation, not provider slowness: with thinking disabled the same calls answer in 1.5–8 s, and the neuron
+cost drops with them (`prompt_tokens 4,078 / completion 1,024` per cognitive call). PRD §11's performance
+target and the free-tier quota math should be re-derived from the new numbers rather than the old ones. The
+tradeoff is stated rather than hidden: a reasoning-disabled model may classify depth less carefully, and that
+quality question is unmeasured — the alternative measured today was not a better answer, it was **no answer at
+all**.
+
 ## 2026-10-15 (late) — Phase 5: the lecturer UI, built and walked through on the real stack
 
 Scope from PRD §13's phase-5 line, against the P0 requirements behind it: assignment list and creation

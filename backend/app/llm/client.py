@@ -88,6 +88,20 @@ class ProviderClient:
                 {"role": "user", "content": user_content},
             ],
             "temperature": settings.llm_temperature if temperature is None else temperature,
+            # Bounded on purpose: an unbounded generation is a call that never returns (see
+            # `llm_max_tokens` in app/config.py). A truncated answer is invalid JSON and costs one
+            # attempt, which is the failure mode we want over an agent that hangs until the timeout.
+            "max_tokens": settings.llm_max_tokens,
+            # The configured model is a reasoning model: it writes its deliberation into `reasoning`
+            # and the answer into `content`, out of the same token budget. Asked to score a
+            # 9k-character analysis on 2026-10-16 it spent every token it was given on reasoning —
+            # 1,024 and then 4,096 — and returned an empty `content` with `finish_reason: length`
+            # both times, which is a dimension that can never be scored. Measured against this
+            # endpoint on the same day: `reasoning_effort` (`none`/`minimal`/`{"effort":"none"}`) and
+            # `thinking: false` are accepted and ignored, and this one disables deliberation —
+            # `finish_reason: stop`, 427 characters of valid JSON, 5.7 s, zero reasoning tokens.
+            # A model swap must re-check it; an endpoint that rejects the field fails loudly.
+            "chat_template_kwargs": {"enable_thinking": False},
             "response_format": {
                 "type": "json_schema",
                 "json_schema": {

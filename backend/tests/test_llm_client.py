@@ -93,6 +93,9 @@ def test_request_is_configured_and_carries_the_schema_both_ways(monkeypatch):
     assert calls[0].url.path.endswith("/chat/completions")
     assert body["model"] == CONFIGURED["LLM_MODEL"]  # from config, never from the call site
     assert body["temperature"] == 0  # the configured default
+    assert body["max_tokens"] == 1024  # bounded output; unbounded generation never returns
+    # Reasoning would spend the whole token budget and leave `content` empty (measured, 2026-10-16).
+    assert body["chat_template_kwargs"] == {"enable_thinking": False}
     assert "seed" not in body  # optional, and unset by default
     assert body["response_format"]["type"] == "json_schema"
     response_schema = body["response_format"]["json_schema"]

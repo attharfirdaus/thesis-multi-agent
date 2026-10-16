@@ -47,6 +47,26 @@ matter, and each one is a bug if it is wrong:
 The invariants kept: the slices always concatenate back to the exact source text, and an empty text renders
 nothing.
 
+## Long work, and what the screen does about it
+
+Measured on the real provider: one submission is three calls at 20–86 s each (mean 45 s), so a single
+submission is minutes and a class is tens of minutes. PRD §9 asks for two things that pull against each
+other — never block the screen, and never lose the work — and the run controls are where they are reconciled:
+
+- **One control, two jobs.** While a run of this assignment is unfinished, the primary control resumes it;
+  it never creates a second run for a submission already being scored. Creating the run additionally carries
+  a synchronous guard, because two presses can otherwise both pass the state check before the first request
+  returns. Two runs on one submission is not a comparison — it is double the provider calls and two sets of
+  scores for the same text under different snapshots.
+- **Visible life during the call.** The provider exposes no progress, so the display is an indeterminate bar
+  with elapsed seconds — never a fabricated percentage — while the determinate bar keeps reporting the job
+  counts between chunks.
+- **Self-healing on load.** A job can sit in `running` while nothing is running (the process that held the
+  lease died). `_requeue_stale` releases exactly that lease, but only when `process` is called, so the page
+  calls `process` on load for an unfinished run and keeps the control enabled whenever a request is not in
+  flight. A dead lease is therefore always clearable by the person in front of the screen, which a
+  "disable while anything is running" rule would have made impossible.
+
 ## Overrides and feedback
 
 An override is its own `lecturer_reviews` row: `system_scores` is never updated (FR-11), so agreement
@@ -107,6 +127,12 @@ lecturer UI receives, which is the point of FR-04.
 - **No JavaScript test runner.** The project has none, and adding one is a dependency decision rather than
   a coding one. The one piece of non-trivial frontend logic (the offset slicer) has a runnable check
   instead; everything else is covered by the live pass.
+- **A dimension that failed its retries cannot be retried in place.** The queue's retry policy (FR-06) is
+  per job and exhausts after three attempts, after which the run is `done` with a flagged failure — that is
+  the state the owner's first run is in. Recovering the dimension means running the assignment again, which
+  creates a *new* run with its own snapshot; the results screen then shows the newest run. A lecturer-facing
+  "retry this dimension" is not in the PRD and was not invented here, but the gap is real and the workaround
+  is not obvious, so it belongs in the record.
 - **`feedback.exported_at` is never written.** The column exists in PRD §10 but no requirement says when it
   should be stamped, and stamping it on a GET would give a read request a side effect. Raised as a
   micro-decision rather than guessed.
