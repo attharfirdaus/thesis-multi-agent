@@ -251,7 +251,13 @@ def get_run(run_id: uuid.UUID, user: CurrentUser) -> RunOut:
 def get_results(run_id: uuid.UUID, user: CurrentUser) -> RunResultsOut:
     """Every score with its evidence span and the synthesis feedback (FR-10, FR-14)."""
     with db.tenant_tx(user.id) as conn, conn.cursor(row_factory=dict_row) as cur:
-        run = cur.execute("select id, status from runs where id = %s", (run_id,)).fetchone()
+        run = cur.execute(
+            # The rubric row the run froze, for the readable name of each level code.
+            "select r.id, r.status, rv.descriptors "
+            "from runs r left join rubric_versions rv on rv.id = r.rubric_version_id "
+            "where r.id = %s",
+            (run_id,),
+        ).fetchone()
         if run is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Run not found.")
 
@@ -308,7 +314,12 @@ def get_results(run_id: uuid.UUID, user: CurrentUser) -> RunResultsOut:
                 )
             )
 
-    return RunResultsOut(run_id=run["id"], status=run["status"], submissions=list(submissions.values()))
+    return RunResultsOut(
+        run_id=run["id"],
+        status=run["status"],
+        submissions=list(submissions.values()),
+        level_names=dict((run["descriptors"] or {}).get("levels") or {}),
+    )
 
 
 def _psycopg_json(value):

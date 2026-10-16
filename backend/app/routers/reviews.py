@@ -61,7 +61,8 @@ def get_submission(submission_id: uuid.UUID, user: CurrentUser) -> SubmissionDet
         reviews: list[ReviewOut] = []
         if run is not None:
             rubric_row = cur.execute(
-                "select version, levels, indicators from rubric_versions where id = %s",
+                "select version, levels, indicators, descriptors "
+                "from rubric_versions where id = %s",
                 (run["rubric_version_id"],),
             ).fetchone()
             if rubric_row is not None:
@@ -69,6 +70,7 @@ def get_submission(submission_id: uuid.UUID, user: CurrentUser) -> SubmissionDet
                     version=str(rubric_row["version"]),
                     levels=list(rubric_row["levels"] or []),
                     indicators=list(rubric_row["indicators"] or []),
+                    level_names=dict((rubric_row["descriptors"] or {}).get("levels") or {}),
                 )
 
             by_id: dict[uuid.UUID, SubmissionScoreOut] = {}

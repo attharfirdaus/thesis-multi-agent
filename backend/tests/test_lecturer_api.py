@@ -11,7 +11,7 @@ import io
 import uuid
 
 import openpyxl
-from conftest import INDICATORS, LEVELS, QUOTE_COGNITIVE
+from conftest import INDICATORS, LEVEL_NAMES, LEVELS, QUOTE_COGNITIVE
 
 from app import db
 from app.jobs.queue import claim_jobs
@@ -130,7 +130,12 @@ def test_detail_shows_the_latest_run_and_its_rubric(seeded):
     assert body["run"] == {"id": second, "status": "done", "mode": "multi_agent"}
     assert body["run"]["id"] != first, "the detail view must follow the newest run, not the first"
     assert body["assignment_id"] == str(seeded["assignment"]), "the detail screen links back to it"
-    assert body["rubric"] == {"version": "1", "levels": LEVELS, "indicators": INDICATORS}
+    assert body["rubric"] == {
+        "version": "1",
+        "levels": LEVELS,
+        "indicators": INDICATORS,
+        "level_names": LEVEL_NAMES,
+    }
     assert body["student_analysis_text"]
     assert body["pseudonym"].startswith("S-")
 
@@ -159,6 +164,21 @@ def test_detail_of_an_unscored_submission_is_not_an_error(seeded):
     assert body["rubric"] is None
     assert body["scores"] == []
     assert body["feedback"] is None
+
+
+def test_a_rubric_without_level_names_reports_none_rather_than_inventing_them(seeded):
+    """A rubric row seeded before names existed carries none.
+
+    The payload then reports an empty map and the screen shows the bare code: a name the data does not have
+    is not the app's to make up (PRD §13 keeps the level scale in the rubric row).
+    """
+    client = seeded["client"]
+    run_id = _run_batch(seeded)
+    with db.tenant_tx(seeded["user"]) as conn:
+        conn.execute("update rubric_versions set descriptors = '{}'::jsonb")
+
+    assert client.get(f"/runs/{run_id}/results").json()["level_names"] == {}
+    assert client.get(f"/submissions/{seeded['submission']}").json()["rubric"]["level_names"] == {}
 
 
 def test_override_needs_a_reason_and_a_known_level(seeded):

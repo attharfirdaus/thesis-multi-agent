@@ -96,6 +96,9 @@ class RunResultsOut(BaseModel):
     run_id: UUID
     status: str
     submissions: list[SubmissionResultOut] = Field(default_factory=list)
+    #: Same map as `RubricOut.level_names`, for the run the results came from: the results table names a
+    #: level ("C4 Analyze") without a second request per row.
+    level_names: dict[str, str] = Field(default_factory=dict)
 
 
 class InFlightOut(BaseModel):
@@ -168,6 +171,10 @@ class RubricOut(BaseModel):
     version: str
     levels: list[str] = Field(default_factory=list)
     indicators: list[str] = Field(default_factory=list)
+    #: `{"C4": "Analyze"}` — the readable name of each level code, from the rubric row itself. A rubric
+    #: seeded before names existed carries none, and the UI then shows the code alone rather than
+    #: inventing a word for it.
+    level_names: dict[str, str] = Field(default_factory=dict)
 
 
 class RunRefOut(BaseModel):

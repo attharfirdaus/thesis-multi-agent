@@ -11,7 +11,13 @@ quote out of the stored text", because that is what makes a score traceable to t
 The `seeded` batch itself lives in `conftest.py`: phase 5's lecturer-UI tests score the same way.
 """
 
-from conftest import INDICATORS, QUOTE_COGNITIVE, StubClient, build_submission_docx
+from conftest import (
+    INDICATORS,
+    LEVEL_NAMES,
+    QUOTE_COGNITIVE,
+    StubClient,
+    build_submission_docx,
+)
 
 from app import db
 from app.agents.models import CognitiveResult, MetacognitiveResult
@@ -46,6 +52,8 @@ def test_one_batch_evaluates_end_to_end_with_evidence(seeded):
     assert results.status_code == 200, results.text
     payload = results.json()
     assert len(payload["submissions"]) == 1
+    # The readable name of each level code travels with the results, so the table can say "C4 Analyze".
+    assert payload["level_names"] == LEVEL_NAMES
 
     submission = payload["submissions"][0]
     assert submission["pseudonym"].startswith("S-")

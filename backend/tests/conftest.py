@@ -49,6 +49,7 @@ from app.agents.models import (  # noqa: E402
 from app.llm.client import Completion  # noqa: E402
 from app.main import app  # noqa: E402  (import after settings are in place)
 from scripts.migrate import run as run_migrations  # noqa: E402
+from scripts.seed_rubric import LEVEL_NAMES  # noqa: E402
 from scripts.setup_checkpointer import setup as setup_checkpointer  # noqa: E402
 
 TENANT_TABLES = [
@@ -177,15 +178,17 @@ def seeded(client, monkeypatch):
 
     with db.tenant_tx(user) as conn:
         # The rubric columns hold the values themselves, the shape scripts/seed_rubric.py writes:
-        # `levels` is the list of level codes the cognitive agent returns.
+        # `levels` is the list of level codes the cognitive agent returns, and `descriptors.levels` their
+        # readable names — which the results table and the detail view show next to the code.
         rubric_id = conn.execute(
             "insert into rubric_versions (owner_id, version, dimensions, levels, indicators, descriptors) "
-            "values (%s, 1, %s, %s, %s, '[]'::jsonb) returning id",
+            "values (%s, 1, %s, %s, %s, %s) returning id",
             (
                 user,
                 json.dumps({"cognitive": "Bloom", "metacognitive": "SRL G1"}),
                 json.dumps(LEVELS),
                 json.dumps(INDICATORS),
+                json.dumps({"levels": LEVEL_NAMES, "indicators": {}, "interim": True}),
             ),
         ).fetchone()[0]
         for agent in ("cognitive", "metacognitive", "synthesis"):
