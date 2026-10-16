@@ -311,10 +311,20 @@ def evaluate_submission(
 ) -> GraphState:
     """Run one submission end to end and return the result. The caller persists it (PRD §6).
 
-    With a checkpointer the run is written step by step with the submission id as the thread, so an
-    interrupted submission resumes at its last completed step rather than paying for the whole pipeline
-    again. Without one the graph still runs — the caller then has job-level retry only, which is what
-    the unit tests use.
+    With a checkpointer the run is written step by step, so an interrupted submission resumes at its last
+    completed step rather than paying for the whole pipeline again. Without one the graph still runs — the
+    caller then has job-level retry only, which is what the unit tests use.
+
+    The checkpoint thread is the *run and submission*, not the submission alone. A checkpoint carries a
+    run's channel values forward, and `flags`/`errors`/`latencies` merge rather than overwrite, so reusing
+    the submission id meant a second run resumed the first run's state: a `cognitive_agent_failed` from a
+    run whose call timed out stuck to a submission the next run scored fine, and the lecturer kept reading
+    "Perlu ditinjau" next to a score that existed (seen live, 2026-10-16). Within one run the same thread
+    still resumes an interrupted submission, which is what the checkpointer is for.
     """
-    config = {"configurable": {"thread_id": state["submission_id"]}} if checkpointer else None
+    config = (
+        {"configurable": {"thread_id": f"{state['run_id']}:{state['submission_id']}"}}
+        if checkpointer
+        else None
+    )
     return build_graph(client=client, checkpointer=checkpointer).invoke(state, config)

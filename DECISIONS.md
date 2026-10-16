@@ -7,6 +7,28 @@ Every provider/model/library fact cited in this project carries a source URL and
 
 No model or provider decision remains open. The hosting decisions (O-2, O-3, O-5) were re-taken twice — on 2026-10-07 (VM dropped) and again on 2026-10-14 (Cloud Run dropped for a card-free host) — see the newest entries; the older ones are kept as the record of what was chosen and why it changed. What is still open lives in PRD section 14 — the supervisors' metacognitive rubric, institutional ethics clearance, the validation-subset size, the SUS instrument, the feedback-text format, and how the two synthetic calibration examples are validated. The few-shot calibration itself is settled: Atthar supplied it on 2026-10-15.
 
+## 2026-10-16 (still later) — A "Perlu Ditinjau" badge that outlived its run
+
+Atthar asked why a submission still showed "Penilaian tingkat kognitif gagal — coba jalankan ulang." The
+answer is a real defect, not a display problem: the submission had been scored **successfully** twice since,
+with a cognitive level stored (C4), and the badge was a leftover from the two runs where the call timed out
+before the reasoning fix.
+
+- **Mechanism.** The checkpointer's thread was the *submission id*, and a checkpoint carries a run's channel
+  values forward. `flags`, `errors` and `latencies` are merge-reduced channels (they have to be: the two
+  analysis agents write them in parallel), so a second run of the same submission resumed the first run's
+  state and **merged** into it: the new run contributed no failure flags, and the old
+  `cognitive_agent_failed` stayed. `review_flags` is written from that merged list, so the lecturer kept
+  reading a warning about a dimension that was scored.
+- **Fix.** The thread is now `f"{run_id}:{submission_id}"`. Each run starts from its own state; within one
+  run the same thread still resumes an interrupted submission, which is what the checkpointer is for.
+- **Verification.** A test drives the real graph twice through the real checkpointer — first with a stub whose
+  cognitive call fails, then with one that succeeds — and asserts the stored flags are empty afterwards. With
+  the old thread id it fails with "Left contains one more item: 'cognitive_agent_failed'". 129 tests green.
+- **Consequence for existing rows.** `review_flags` reflects the latest run that scored the submission, so a
+  re-run clears a stale flag; nothing else needs to be repaired by hand, and the stale flags in the app's
+  database are the record of the runs that actually failed.
+
 ## 2026-10-16 (later still) — Deleting a submission, and one fact one warning
 
 **Atthar asked for "a feature to delete student posts"** (submissions). `DELETE /submissions/{id}` answers 204

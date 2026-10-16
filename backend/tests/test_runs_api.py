@@ -11,7 +11,7 @@ quote out of the stored text", because that is what makes a score traceable to t
 The `seeded` batch itself lives in `conftest.py`: phase 5's lecturer-UI tests score the same way.
 """
 
-from conftest import INDICATORS, QUOTE_COGNITIVE
+from conftest import INDICATORS, QUOTE_COGNITIVE, StubClient
 
 from app import db
 from app.agents.models import CognitiveResult, MetacognitiveResult
@@ -81,6 +81,63 @@ def test_one_batch_evaluates_end_to_end_with_evidence(seeded):
         ).fetchall()
     assert {name for name, _ in traces} == {"cognitive", "metacognitive", "synthesis"}, traces
     assert {latency for _, latency in traces} == {7}, traces
+
+
+def test_a_new_run_does_not_inherit_the_previous_run_s_flags(seeded, monkeypatch):
+    """A completed run leaves a checkpoint behind, and `flags` merges.
+
+    The checkpointer's thread used to be the submission id, so a second run of the same submission resumed
+    the first run's channels instead of starting clean: a `cognitive_agent_failed` from a run whose call
+    timed out stuck to a submission the next run scored fine, and the lecturer kept reading "Perlu ditinjau
+    dosen" next to a score that existed (seen live, 2026-10-16).
+    """
+    client, csrf = seeded["client"], seeded["csrf"]
+    import app.agents.graph as graph_module
+
+    def evaluate_with(stub):
+        def run(state, checkpointer=None):
+            return graph_module.evaluate_submission(state, client=stub, checkpointer=checkpointer)
+
+        return run
+
+    def start_run() -> str:
+        return client.post(
+            f"/assignments/{seeded['assignment']}/runs", headers={"X-CSRF-Token": csrf}
+        ).json()["id"]
+
+    monkeypatch.setattr(
+        "app.jobs.worker.evaluate_submission", evaluate_with(_CognitiveFails(StubClient()))
+    )
+    first = start_run()
+    client.post(f"/runs/{first}/process?limit=5", headers={"X-CSRF-Token": csrf})
+    with db.tenant_tx(seeded["user"]) as conn:
+        assert conn.execute("select review_flags from submissions").fetchone()[0] == [
+            "cognitive_agent_failed"
+        ]
+
+    monkeypatch.setattr("app.jobs.worker.evaluate_submission", evaluate_with(StubClient()))
+    second = start_run()
+    client.post(f"/runs/{second}/process?limit=5", headers={"X-CSRF-Token": csrf})
+
+    with db.tenant_tx(seeded["user"]) as conn:
+        flags = conn.execute("select review_flags from submissions").fetchone()[0]
+        scores = conn.execute(
+            "select count(*) from system_scores where run_id = %s", (second,)
+        ).fetchone()[0]
+    assert scores > 0, "the second run must actually have scored, or this proves nothing"
+    assert flags == [], f"a run that scored every dimension must not inherit an old failure: {flags}"
+
+
+class _CognitiveFails:
+    """The canned answers, except the cognitive call, which fails like a dead provider."""
+
+    def __init__(self, inner) -> None:
+        self.inner = inner
+
+    def complete_json(self, *, system, user, schema, temperature=None, seed=None):
+        if schema is CognitiveResult:
+            raise RuntimeError("provider unreachable")
+        return self.inner.complete_json(system=system, user=user, schema=schema)
 
 
 def test_run_status_reports_job_counts(seeded):
