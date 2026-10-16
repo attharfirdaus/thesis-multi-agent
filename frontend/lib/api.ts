@@ -196,13 +196,19 @@ export type RunResults = {
     submission_id: string;
     pseudonym: string;
     review_flags?: string[];
+    /** Exactly the text the export writes: `coalesce(edited_text, generated_text)`. */
     feedback_text: string | null;
+    /** Whether that text is the lecturer's edit rather than the generated one. */
+    feedback_edited: boolean;
     scores: {
+      id: string;
       dimension: "cognitive" | "metacognitive";
       indicator: string | null;
       level: string;
       rationale: string | null;
       evidence: Evidence[];
+      /** The newest lecturer review of this score, or null while nobody has judged it. */
+      review: Review | null;
     }[];
   }[];
 };

@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { Fragment, useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 
@@ -21,7 +21,78 @@ type Row = {
   level: string | null;
   indicators: Record<string, string>;
   flagged: boolean;
+  /** The source submission, so the preview shows exactly what the export is built from. */
+  source: RunResults["submissions"][number];
 };
+
+const DIMENSION_LABEL: Record<"cognitive" | "metacognitive", string> = {
+  cognitive: "Tingkat Kognitif",
+  metacognitive: "Indikator Metakognitif",
+};
+
+/**
+ * What one submission's rows in the exported file contain. It reads like the file on purpose: the
+ * feedback is verbatim, and a reviewed score still shows the system's level with the lecturer's beside
+ * it, because the export keeps both.
+ */
+function ExportPreview({
+  submission,
+  levelNames,
+}: {
+  submission: RunResults["submissions"][number];
+  levelNames: Record<string, string>;
+}) {
+  return (
+    <div className="flex flex-col gap-4 rounded-lg bg-muted/40 p-4">
+      <p className="font-medium">Pratinjau isi ekspor untuk {submission.pseudonym}</p>
+
+      {submission.scores.map((score) => (
+        <div key={score.id} className="flex flex-col gap-2">
+          <p>
+            <span className="font-medium">{DIMENSION_LABEL[score.dimension]}</span>{" "}
+            {score.indicator ? `${score.indicator} · ` : ""}
+            {levelLabel(scoreLevel(score.level), levelNames)}
+          </p>
+          {score.rationale ? <p className="text-muted-foreground">Penjelasan: {score.rationale}</p> : null}
+          {score.evidence.length > 0 ? (
+            <div className="flex flex-col gap-1">
+              <p className="text-muted-foreground">Kutipan bukti:</p>
+              {score.evidence.map((evidence) => (
+                <p
+                  key={`${evidence.start_offset}-${evidence.end_offset}`}
+                  className="border-l-2 border-amber-500 pl-3 italic"
+                >
+                  “{evidence.quote}”
+                </p>
+              ))}
+            </div>
+          ) : (
+            <p className="text-muted-foreground">Kutipan bukti tidak ditemukan.</p>
+          )}
+          <p className="text-muted-foreground">
+            {score.review
+              ? score.review.action === "accept"
+                ? "Tinjauan dosen: nilai sistem diterima."
+                : `Tinjauan dosen: diubah menjadi ${levelLabel(
+                    scoreLevel(score.review.new_level ?? ""),
+                    levelNames,
+                  )}${score.review.reason ? ` — ${score.review.reason}` : ""}`
+              : "Tinjauan dosen: belum ditinjau."}
+          </p>
+        </div>
+      ))}
+
+      <div className="flex flex-col gap-1">
+        <p className="font-medium">
+          {submission.feedback_edited ? "Umpan balik (disunting dosen)" : "Umpan balik"}
+        </p>
+        <p className="text-muted-foreground whitespace-pre-wrap">
+          {submission.feedback_text ?? "Belum ada umpan balik."}
+        </p>
+      </div>
+    </div>
+  );
+}
 
 export default function HasilPage() {
   const { id } = useParams<{ id: string }>();
@@ -32,6 +103,7 @@ export default function HasilPage() {
   const [sortKey, setSortKey] = useState<SortKey>("pseudonym");
   const [ascending, setAscending] = useState(true);
   const [levelFilter, setLevelFilter] = useState("");
+  const [expandedId, setExpandedId] = useState<string | null>(null);
 
   const load = useCallback(
     () =>
@@ -66,6 +138,7 @@ export default function HasilPage() {
       level: submission.scores.find((score) => score.dimension === "cognitive")?.level ?? null,
       indicators,
       flagged: (submission.review_flags ?? []).length > 0,
+      source: submission,
     };
   });
 
@@ -216,23 +289,26 @@ export default function HasilPage() {
                               </th>
                             ))}
                             {sortableHeader("review", "Tinjauan")}
+                            <th scope="col" className="py-2 pl-4 font-medium">
+                              Ekspor
+                            </th>
                           </tr>
                         </thead>
                         <tbody>
                           {visible.map((row) => (
-                            <tr
-                              key={row.id}
-                              onClick={() => router.push(`/kiriman/${row.id}`)}
-                              className="cursor-pointer border-b last:border-0 hover:bg-muted/60"
-                            >
-                              <td className="py-2 pr-4">
-                                <Link
-                                  href={`/kiriman/${row.id}`}
-                                  className="underline underline-offset-4 hover:text-foreground"
-                                >
-                                  {row.pseudonym}
-                                </Link>
-                              </td>
+                            <Fragment key={row.id}>
+                              <tr
+                                onClick={() => router.push(`/kiriman/${row.id}`)}
+                                className="cursor-pointer border-b hover:bg-muted/60"
+                              >
+                                <td className="py-2 pr-4">
+                                  <Link
+                                    href={`/kiriman/${row.id}`}
+                                    className="underline underline-offset-4 hover:text-foreground"
+                                  >
+                                    {row.pseudonym}
+                                  </Link>
+                                </td>
                               <td className="py-2 pr-4">
                                 {row.level === null ? "—" : levelLabel(scoreLevel(row.level), levelNames)}
                               </td>
@@ -243,14 +319,38 @@ export default function HasilPage() {
                                     : scoreLevel(row.indicators[indicator])}
                                 </td>
                               ))}
-                              <td className="py-2 pr-4">
-                                {row.flagged ? (
-                                  <StatusBadge tone="amber" label="Perlu Ditinjau" />
-                                ) : (
-                                  <span className="text-muted-foreground">Sesuai</span>
-                                )}
-                              </td>
-                            </tr>
+                                <td className="py-2 pr-4">
+                                  {row.flagged ? (
+                                    <StatusBadge tone="amber" label="Perlu Ditinjau" />
+                                  ) : (
+                                    <span className="text-muted-foreground">Sesuai</span>
+                                  )}
+                                </td>
+                                <td className="py-2 pl-4">
+                                  {/* Reading the row opens the detail; this only opens the preview. */}
+                                  <Button
+                                    variant="outline"
+                                    size="sm"
+                                    aria-expanded={expandedId === row.id}
+                                    aria-controls={`pratinjau-${row.id}`}
+                                    aria-label={`Pratinjau isi ekspor ${row.pseudonym}`}
+                                    onClick={(event) => {
+                                      event.stopPropagation();
+                                      setExpandedId((current) => (current === row.id ? null : row.id));
+                                    }}
+                                  >
+                                    Pratinjau
+                                  </Button>
+                                </td>
+                              </tr>
+                              {expandedId === row.id ? (
+                                <tr id={`pratinjau-${row.id}`} className="border-b">
+                                  <td colSpan={4 + indicatorColumns.length} className="py-3">
+                                    <ExportPreview submission={row.source} levelNames={levelNames} />
+                                  </td>
+                                </tr>
+                              ) : null}
+                            </Fragment>
                           ))}
                         </tbody>
                       </table>
