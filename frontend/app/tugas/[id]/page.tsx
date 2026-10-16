@@ -28,6 +28,13 @@ const PROCESS_TIMEOUT_MS = 30 * 60 * 1000;
 
 const ACCEPTED_FILES = ".pdf,.docx,.txt,.zip";
 
+/**
+ * While a process call is in flight the page asks the run for its state, because that is the only way
+ * to see which submission the server has claimed: the lease is written when the job starts, and the
+ * process response only arrives when it is over.
+ */
+const IN_FLIGHT_POLL_MS = 3000;
+
 /** Jobs the queue still owns. A `running` job is already claimed, so it must not be started again. */
 const pendingJobs = (jobs: RunSummary["jobs"]) => (jobs.queued ?? 0) + (jobs.running ?? 0);
 
@@ -54,7 +61,13 @@ function jobTotals(jobs: RunSummary["jobs"]) {
   const counts = jobs ?? {};
   const done = counts.done ?? 0;
   const failed = counts.failed ?? 0;
-  return { done, failed, queued: counts.queued ?? 0, total: Object.values(counts).reduce((s, n) => s + n, 0) };
+  return {
+    done,
+    failed,
+    cancelled: counts.cancelled ?? 0,
+    queued: counts.queued ?? 0,
+    total: Object.values(counts).reduce((s, n) => s + n, 0),
+  };
 }
 
 export default function TugasPage() {
@@ -68,10 +81,14 @@ export default function TugasPage() {
   const [driving, setDriving] = useState(false);
   const [calling, setCalling] = useState(false);
   const [elapsed, setElapsed] = useState(0);
+  const [drivenRunId, setDrivenRunId] = useState<string | null>(null);
+  const [cancellingRun, setCancellingRun] = useState(false);
   const fileInput = useRef<HTMLInputElement>(null);
   const drivingRun = useRef<string | null>(null);
   const resumedRun = useRef<string | null>(null);
   const callStartedAt = useRef(0);
+  const callController = useRef<AbortController | null>(null);
+  const cancelling = useRef(false);
   const starting = useRef(false);
 
   const load = useCallback(
@@ -103,6 +120,16 @@ export default function TugasPage() {
     return () => clearInterval(timer);
   }, [calling]);
 
+  // Naming what is being graded needs a second look while the call is open: by the time the process
+  // response arrives the job it claimed is already finished, so `in_flight` is only populated mid-call.
+  useEffect(() => {
+    if (!calling || drivenRunId === null) return;
+    const poll = setInterval(() => {
+      api.getRun(drivenRunId).then(setRun, () => {});
+    }, IN_FLIGHT_POLL_MS);
+    return () => clearInterval(poll);
+  }, [calling, drivenRunId]);
+
   /**
    * Drive a run to completion. Each call evaluates a bounded chunk; the run itself lives in the
    * database, so closing this tab loses only the loop, and a reload resumes it from `jobs`.
@@ -111,6 +138,7 @@ export default function TugasPage() {
     async (runId: string) => {
       if (drivingRun.current === runId) return;
       drivingRun.current = runId;
+      setDrivenRunId(runId);
       setDriving(true);
       setError(null);
       setNote(null);
@@ -121,6 +149,7 @@ export default function TugasPage() {
         for (;;) {
           const controller = new AbortController();
           const timeout = setTimeout(() => controller.abort(), PROCESS_TIMEOUT_MS);
+          callController.current = controller;
           callStartedAt.current = Date.now();
           setElapsed(0);
           setCalling(true);
@@ -128,6 +157,7 @@ export default function TugasPage() {
             await api.processRun(runId, PROCESS_CHUNK, controller.signal);
           } finally {
             clearTimeout(timeout);
+            callController.current = null;
             setCalling(false);
           }
           const current = await api.getRun(runId);
@@ -146,14 +176,17 @@ export default function TugasPage() {
           }
         }
       } catch (err) {
-        // The work already done is in the database, so a dead request loses nothing but this loop.
-        if (err instanceof DOMException && err.name === "AbortError") {
-          setNote("Permintaan penilaian melewati batas waktu tunggu. Penilaian dapat dilanjutkan.");
-        } else {
-          setError(err instanceof Error ? err.message : "Penilaian gagal dijalankan.");
+        // A cancel from this page aborts the call on purpose; the cancel control reports the outcome.
+        if (!cancelling.current) {
+          if (err instanceof DOMException && err.name === "AbortError") {
+            setNote("Permintaan penilaian melewati batas waktu tunggu. Penilaian dapat dilanjutkan.");
+          } else {
+            setError(err instanceof Error ? err.message : "Penilaian gagal dijalankan.");
+          }
         }
       } finally {
         drivingRun.current = null;
+        setDrivenRunId(null);
         setDriving(false);
         await load();
       }
@@ -170,6 +203,9 @@ export default function TugasPage() {
     ? [...(run ? [run] : []), ...detail.runs.filter((item) => item.id !== run?.id)]
     : [];
   const unfinishedRunId = liveRuns.find((item) => pendingJobs(item.jobs) > 0)?.id ?? null;
+  const inFlightNames = (run?.in_flight ?? []).map((item) => item.pseudonym);
+  // Cancelling stops the run this page is working on; only then the one still holding queued jobs.
+  const cancelTargetId = drivenRunId ?? unfinishedRunId;
 
   // Self-healing after a crash or a closed tab: one process call is idempotent, and it is what clears a
   // stale lease, so an unfinished run is picked up again as soon as the page is open.
@@ -219,6 +255,42 @@ export default function TugasPage() {
       setError(err instanceof Error ? err.message : "Gagal memulai penilaian.");
     } finally {
       starting.current = false;
+    }
+  }
+
+  /** Stop what is still waiting. The submission the server already claimed cannot be stopped. */
+  async function onCancel() {
+    const targetId = drivenRunId ?? unfinishedRunId;
+    if (targetId === null || cancelling.current) return;
+    const grading = (run?.in_flight ?? []).map((item) => item.pseudonym);
+    const warning =
+      grading.length > 0
+        ? `Batalkan penilaian? Kiriman yang masih menunggu tidak akan dinilai. ${grading.join(", ")} sedang dinilai dan tetap diselesaikan.`
+        : "Batalkan penilaian? Kiriman yang masih menunggu tidak akan dinilai.";
+    if (!window.confirm(warning)) return;
+
+    cancelling.current = true;
+    setCancellingRun(true);
+    setError(null);
+    setNote(null);
+    try {
+      // Dropping this page's request stops the waiting; the server finishes the submission it holds.
+      callController.current?.abort();
+      const cancelled = await api.cancelRun(targetId);
+      setRun(cancelled);
+      const jobs = jobTotals(cancelled.jobs);
+      setNote(
+        `Penilaian dihentikan: ${jobs.done} selesai, ${jobs.cancelled} dibatalkan.` +
+          (grading.length > 0
+            ? ` ${grading.join(", ")} tetap diselesaikan dan nilainya tetap tersimpan.`
+            : ""),
+      );
+      await load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Gagal menghentikan penilaian.");
+    } finally {
+      cancelling.current = false;
+      setCancellingRun(false);
     }
   }
 
@@ -319,8 +391,10 @@ export default function TugasPage() {
                   <div className="flex flex-wrap items-center gap-2">
                     <StatusBadge {...runStatus(run.status)} />
                     <span className="text-sm text-muted-foreground">
-                      {totals.done} selesai · {totals.queued} menunggu
-                      {totals.failed > 0 ? ` · ${totals.failed} gagal` : ""} dari {totals.total} kiriman
+                      {totals.done} dari {totals.total} selesai
+                      {totals.queued > 0 ? ` · ${totals.queued} menunggu` : ""}
+                      {totals.cancelled > 0 ? ` · ${totals.cancelled} dibatalkan` : ""}
+                      {totals.failed > 0 ? ` · ${totals.failed} gagal` : ""}
                     </span>
                   </div>
                   <div
@@ -352,19 +426,26 @@ export default function TugasPage() {
                   >
                     <div className="h-full w-1/3 animate-pulse rounded-full bg-primary" />
                   </div>
+                  {calling && inFlightNames.length > 0 ? (
+                    <p className="text-sm">
+                      Sedang menilai <span className="font-medium">{inFlightNames.join(", ")}</span>
+                    </p>
+                  ) : null}
                   <p className="text-sm text-muted-foreground">
                     {calling
                       ? `Menilai… ${duration(elapsed)}`
                       : "Menilai… menyiapkan kiriman berikutnya."}
                   </p>
+                  <p className="text-sm text-muted-foreground">
+                    Penilaian berjalan per kiriman, jadi waktu per tahap tidak dilaporkan.
+                  </p>
                 </div>
               ) : null}
 
-              <div className="flex flex-col gap-2">
+              <div className="flex flex-wrap items-center gap-3">
                 <Button
                   onClick={unfinishedRunId !== null ? () => void drive(unfinishedRunId) : onStart}
                   disabled={driving || (unfinishedRunId === null && submissions.length === 0)}
-                  className="self-start"
                 >
                   {driving
                     ? "Penilaian sedang berjalan…"
@@ -372,18 +453,27 @@ export default function TugasPage() {
                       ? "Lanjutkan penilaian"
                       : "Jalankan penilaian"}
                 </Button>
-                {unfinishedRunId !== null ? (
-                  <p className="text-sm text-muted-foreground">
-                    Kiriman yang sedang dinilai tidak dinilai dua kali; tombol ini melanjutkan penilaian yang
-                    belum selesai.
-                  </p>
-                ) : null}
-                {unfinishedRunId === null && submissions.length === 0 ? (
-                  <p className="text-sm text-muted-foreground">
-                    Unggah minimal satu kiriman sebelum menilai.
-                  </p>
+                {cancelTargetId !== null ? (
+                  <Button
+                    variant="destructive"
+                    onClick={() => void onCancel()}
+                    disabled={cancellingRun}
+                  >
+                    {cancellingRun ? "Menghentikan…" : "Batalkan penilaian"}
+                  </Button>
                 ) : null}
               </div>
+              {cancelTargetId !== null ? (
+                <p className="text-sm text-muted-foreground">
+                  Penghentian hanya berlaku untuk kiriman yang belum dinilai; kiriman yang sedang
+                  dikerjakan tetap diselesaikan.
+                </p>
+              ) : null}
+              {cancelTargetId === null && submissions.length === 0 ? (
+                <p className="text-sm text-muted-foreground">
+                  Unggah minimal satu kiriman sebelum menilai.
+                </p>
+              ) : null}
             </CardContent>
           </Card>
 

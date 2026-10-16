@@ -7,6 +7,32 @@ Every provider/model/library fact cited in this project carries a source URL and
 
 No model or provider decision remains open. The hosting decisions (O-2, O-3, O-5) were re-taken twice — on 2026-10-07 (VM dropped) and again on 2026-10-14 (Cloud Run dropped for a card-free host) — see the newest entries; the older ones are kept as the record of what was chosen and why it changed. What is still open lives in PRD section 14 — the supervisors' metacognitive rubric, institutional ethics clearance, the validation-subset size, the SUS instrument, the feedback-text format, and how the two synthetic calibration examples are validated. The few-shot calibration itself is settled: Atthar supplied it on 2026-10-15.
 
+## 2026-10-16 (later) — Three UI asks from Atthar: transparency, cursors, cancel
+
+The owner's list, verbatim, and what each one turned out to require.
+
+- **"Add process transparency while a task is being graded."** `RunOut` gained
+  `in_flight: [{submission_id, pseudonym}]` — the submissions whose job is `running` right now — so the
+  screen can name what it is reading ("Sedang menilai S-009a702e") instead of only counting. Granularity is
+  honest: the API reports per submission, not per agent, so the UI does not claim to know which step of the
+  pipeline is running. The indeterminate bar and the elapsed timer stay, since a provider call still
+  reports no progress of its own.
+- **"Change the cursor to a pointer when hovering over any button."** Root cause: Tailwind's preflight
+  leaves buttons at `cursor: default`, so every button in the app showed a text cursor. Fixed once in the
+  shared `Button` primitive rather than per screen, with `cursor-not-allowed` for the disabled state —
+  the distinction is the information the cursor carries, and a hover pointer on a dead button would be a
+  lie about what a click does.
+- **"Add a cancel button while the grading process is underway."** New endpoint
+  `POST /runs/{id}/cancel`, migration `0005` (both `runs.status` and `jobs.status` needed `cancelled` in
+  their check constraints), and the semantics recorded in `docs/phase-5/design.md`: **the queue stops, the
+  process does not** — a submission already claimed finishes and stores its scores, and the response says
+  so with the counts and the in-flight submission named. Cancelling a finished run is a 409, because
+  rewriting a completed evaluation as a stopped one is a mistake nobody would see on screen. A cancelled
+  run stays cancelled through the next pass, so the control cannot be undone by the very work it stopped.
+
+Verified: 124 backend tests (three new: the in-flight report, the not-resurrected cancelled run, and the
+409 on a finished run), ruff and mypy clean, migration applied to the app's database.
+
 ## 2026-10-16 — First real use: four defects found and fixed
 
 Context: Atthar ran the app on his own account — one assignment ("ISO"), one submission (the 9,155-character

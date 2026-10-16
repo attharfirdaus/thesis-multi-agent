@@ -252,6 +252,7 @@ def seeded(client, monkeypatch):
         "user": user,
         "assignment": assignment,
         "submission": upload.json()["files"][0]["submission_id"],
+        "pseudonym": upload.json()["files"][0]["pseudonym"],
         "csrf": client.cookies.get("ta_csrf"),
         "stub": stub,
     }

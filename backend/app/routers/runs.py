@@ -22,6 +22,7 @@ from app.jobs.worker import process_run
 from app.routers.auth import CurrentUser
 from app.schemas import (
     EvidenceOut,
+    InFlightOut,
     RunOut,
     RunResultsOut,
     ScoreOut,
@@ -36,6 +37,46 @@ def _count(row: dict | None) -> int:
     """An aggregate `select count(*)` always returns a row; mypy cannot know that, and a missing row
     should read as zero rather than explode."""
     return int(row["n"]) if row else 0
+
+
+def _run_out(cur, run_id: uuid.UUID, *, processed: int = 0, failed: int = 0) -> RunOut:
+    """The run as the lecturer's screen reads it: status, job counts, what needs review, what is in flight.
+
+    One builder for the three endpoints that return a run, so a field added here — `in_flight` was —
+    cannot show up on one screen and be missing on another.
+    """
+    run = cur.execute("select id, status, mode from runs where id = %s", (run_id,)).fetchone()
+    if run is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Run not found.")
+    counts = cur.execute(
+        "select status, count(*) as n from jobs where run_id = %s group by status", (run_id,)
+    ).fetchall()
+    needs_review = _count(
+        cur.execute(
+            "select count(*) as n from submissions s join jobs j on j.submission_id = s.id "
+            "where j.run_id = %s and jsonb_array_length(s.review_flags) > 0",
+            (run_id,),
+        ).fetchone()
+    )
+    in_flight = [
+        InFlightOut(**row)
+        for row in cur.execute(
+            "select s.id as submission_id, s.pseudonym from jobs j "
+            "join submissions s on s.id = j.submission_id "
+            "where j.run_id = %s and j.status = 'running' order by s.pseudonym",
+            (run_id,),
+        ).fetchall()
+    ]
+    return RunOut(
+        id=run["id"],
+        status=run["status"],
+        mode=run["mode"],
+        jobs={row["status"]: row["n"] for row in counts},
+        needs_review=needs_review,
+        processed=processed,
+        failed=failed,
+        in_flight=in_flight,
+    )
 
 
 def _model_config() -> dict:
@@ -146,58 +187,57 @@ def process_jobs(
                     (run_id,),
                 ).fetchone()
             )
-            counts = cur.execute(
-                "select status, count(*) as n from jobs where run_id = %s group by status", (run_id,)
-            ).fetchall()
-            needs_review = _count(
-                cur.execute(
-                    "select count(*) as n from submissions s join jobs j on j.submission_id = s.id "
-                    "where j.run_id = %s and jsonb_array_length(s.review_flags) > 0",
-                    (run_id,),
-                ).fetchone()
-            )
-            run = cur.execute("select mode from runs where id = %s", (run_id,)).fetchone()
-            if run is None:
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Run not found.")
-            run_status = "running" if unfinished else "done"
+            # A cancelled run stays cancelled: this pass may finish the submission it was already
+            # grading, but it must not relabel the run as running again.
             cur.execute(
-                "update runs set status = %s, finished_at = now() where id = %s", (run_status, run_id)
+                "update runs set status = %s, finished_at = now() "
+                "where id = %s and owner_id = %s and status <> 'cancelled'",
+                ("running" if unfinished else "done", run_id, user.id),
+            )
+            return _run_out(
+                cur, run_id, processed=summary.get("done", 0), failed=summary.get("failed", 0)
             )
 
-    return RunOut(
-        id=run_id,
-        status=run_status,
-        mode=run["mode"],
-        jobs={row["status"]: row["n"] for row in counts},
-        needs_review=needs_review,
-        processed=summary.get("done", 0),
-        failed=summary.get("failed", 0),
-    )
+
+@router.post("/runs/{run_id}/cancel", response_model=RunOut)
+def cancel_run(run_id: uuid.UUID, request: Request, user: CurrentUser) -> RunOut:
+    """Stop the queue: this run's queued jobs are cancelled and the run is marked cancelled.
+
+    A submission already being graded is **not** stopped. The server-side request that holds it does not
+    see the client go away, and interrupting it mid-call would leave a half-written submission; it
+    finishes and stores its scores. The response says exactly that, with the counts and the submission
+    still in flight, rather than implying a clean stop.
+    """
+    require_csrf(request)
+    with db.tenant_tx(user.id) as conn, conn.cursor(row_factory=dict_row) as cur:
+        run = cur.execute("select id, status from runs where id = %s", (run_id,)).fetchone()
+        if run is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Run not found.")
+        if run["status"] in ("done", "failed", "cancelled"):
+            # Cancelling a finished run would relabel a completed evaluation as a stopped one, and the
+            # thesis reads that status to know what it is looking at.
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT, detail="This run has already finished."
+            )
+        cur.execute(
+            "update jobs set status = 'cancelled', updated_at = now() "
+            "where run_id = %s and owner_id = %s and status = 'queued'",
+            (run_id, user.id),
+        )
+        # `finished_at` is when the queue stopped, which is the honest reading for a cancelled run even
+        # when one submission is still being graded.
+        cur.execute(
+            "update runs set status = 'cancelled', finished_at = now() "
+            "where id = %s and owner_id = %s",
+            (run_id, user.id),
+        )
+        return _run_out(cur, run_id)
 
 
 @router.get("/runs/{run_id}", response_model=RunOut)
 def get_run(run_id: uuid.UUID, user: CurrentUser) -> RunOut:
     with db.tenant_tx(user.id) as conn, conn.cursor(row_factory=dict_row) as cur:
-        run = cur.execute("select id, status, mode from runs where id = %s", (run_id,)).fetchone()
-        if run is None:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Run not found.")
-        counts = cur.execute(
-            "select status, count(*) as n from jobs where run_id = %s group by status", (run_id,)
-        ).fetchall()
-        needs_review = _count(
-            cur.execute(
-                "select count(*) as n from submissions s join jobs j on j.submission_id = s.id "
-                "where j.run_id = %s and jsonb_array_length(s.review_flags) > 0",
-                (run_id,),
-            ).fetchone()
-        )
-    return RunOut(
-        id=run["id"],
-        status=run["status"],
-        mode=run["mode"],
-        jobs={row["status"]: row["n"] for row in counts},
-        needs_review=needs_review,
-    )
+        return _run_out(cur, run_id)
 
 
 @router.get("/runs/{run_id}/results", response_model=RunResultsOut)

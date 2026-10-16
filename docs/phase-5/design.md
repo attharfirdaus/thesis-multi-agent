@@ -67,6 +67,25 @@ other — never block the screen, and never lose the work — and the run contro
   flight. A dead lease is therefore always clearable by the person in front of the screen, which a
   "disable while anything is running" rule would have made impossible.
 
+## Stopping a run
+
+The lecturer can stop a batch that is underway, and what "stop" means is exactly this: **the queue stops,
+the process does not.** `POST /runs/{id}/cancel` marks the run's queued jobs `cancelled` and the run
+`cancelled`; a submission already claimed keeps being graded, because the server-side request cannot be
+recalled and interrupting it would leave a half-written submission. It finishes and stores its scores. The
+response therefore names what is still in flight rather than reporting a clean stop that the lecturer would
+see contradicted a minute later.
+
+- **`cancelled` is terminal and its own outcome.** Both `runs.status` and `jobs.status` constrain their
+  values, so migration `0005` adds it to both: the alternative was recording a stop as *failed*, which
+  would make the thesis unable to tell "the provider broke" from "the lecturer changed their mind".
+- **A finished run cannot be cancelled** (409). Relabelling a completed evaluation as a stopped one is the
+  one mistake this control could make that nobody would notice from the screen.
+- **A cancelled run is not resurrected** by the next pass: the pass may finish the submission it was
+  holding, but it will not relabel the run `running` or `done`.
+- Because the run is terminal, the ordinary way to continue is to start a new one — and the results screen
+  shows the newest run, which is what a partial run should be compared against anyway.
+
 ## Overrides and feedback
 
 An override is its own `lecturer_reviews` row: `system_scores` is never updated (FR-11), so agreement

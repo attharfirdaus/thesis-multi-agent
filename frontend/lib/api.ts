@@ -83,7 +83,18 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
 /** Job counts per status (`queued`, `running`, `done`, `failed`) — PRD §10 `Job`. */
 export type JobCounts = Record<string, number>;
 
-export type RunSummary = { id: string; status: string; jobs: JobCounts };
+export type RunInFlight = { submission_id: string; pseudonym: string };
+
+/**
+ * A run. The list endpoint's `latest_run` carries only the id, status and counters; the run endpoints
+ * add `in_flight`, which names the submissions being graded right now.
+ */
+export type RunSummary = {
+  id: string;
+  status: string;
+  jobs: JobCounts;
+  in_flight?: RunInFlight[];
+};
 
 export type AssignmentSummary = {
   id: string;
@@ -230,6 +241,8 @@ export const api = {
     request<RunSummary>(`/runs/${runId}/process?limit=${limit}`, { method: "POST", signal }),
 
   getRun: (runId: string) => request<RunSummary>(`/runs/${runId}`),
+
+  cancelRun: (runId: string) => request<RunSummary>(`/runs/${runId}/cancel`, { method: "POST" }),
 
   getRunResults: (runId: string) => request<RunResults>(`/runs/${runId}/results`),
 

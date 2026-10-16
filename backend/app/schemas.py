@@ -98,6 +98,17 @@ class RunResultsOut(BaseModel):
     submissions: list[SubmissionResultOut] = Field(default_factory=list)
 
 
+class InFlightOut(BaseModel):
+    """The submission a job is grading right now.
+
+    The lecturer's screen can show what it is working on, not only how much is left: the counts say
+    "2 of 4", and this says which one is being read.
+    """
+
+    submission_id: UUID
+    pseudonym: str
+
+
 class RunOut(BaseModel):
     id: UUID
     status: str
@@ -106,6 +117,7 @@ class RunOut(BaseModel):
     needs_review: int = 0
     processed: int = 0
     failed: int = 0
+    in_flight: list[InFlightOut] = Field(default_factory=list)
 
 
 # --------------------------------------------------------------- lecturer UI (phase 5)

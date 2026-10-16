@@ -38,6 +38,7 @@ const RUN_STATUS: Record<string, StatusMeta> = {
   queued: { label: "Menunggu", tone: "neutral" },
   running: { label: "Sedang berjalan", tone: "neutral" },
   done: { label: "Selesai", tone: "green" },
+  cancelled: { label: "Dibatalkan", tone: "neutral" },
   failed: { label: "Gagal", tone: "red" },
 };
 
