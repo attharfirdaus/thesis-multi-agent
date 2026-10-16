@@ -121,17 +121,18 @@ def create_run(
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Assignment not found.")
         rubric_version_id = assignment["rubric_version_id"]
 
+        # Two plain queries rather than one with a conditional predicate: which submissions a run covers
+        # is the thing the lecturer just chose, and it should be readable here.
+        ungraded_only = (
+            "select s.id from submissions s where s.assignment_id = %s "
+            "and not exists (select 1 from system_scores sc where sc.submission_id = s.id) "
+            "order by s.created_at"
+        )
+        every_submission = "select id from submissions where assignment_id = %s order by created_at"
         submissions = [
             row["id"]
             for row in cur.execute(
-                # Two plain queries rather than one with a conditional predicate: which submissions a
-                # run covers is the thing the lecturer just chose, and it should be readable here.
-                "select s.id from submissions s where s.assignment_id = %s "
-                "and not exists (select 1 from system_scores sc where sc.submission_id = s.id) "
-                "order by s.created_at"
-                if only_ungraded
-                else "select id from submissions where assignment_id = %s order by created_at",
-                (assignment_id,),
+                ungraded_only if only_ungraded else every_submission, (assignment_id,)
             ).fetchall()
         ]
         if not submissions:
