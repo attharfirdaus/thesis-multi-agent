@@ -26,7 +26,7 @@ the failure is a generic sentence, never an English one.
 | --- | --- | --- |
 | `/dasbor` | Assignment list with submission count and the newest run's state; create form; empty state naming the next step | FR-02 |
 | `/tugas/[id]` | Upload (multi-file, per-file result), submission table with status flags and one destructive delete per row, the evaluate control (create run → process in chunks → poll until done), progress from job counts, and resume-after-reload | FR-03, FR-06 |
-| `/tugas/[id]/hasil` | Results table: sortable pseudonym / cognitive level / review column, filter by level, `Perlu Ditinjau` badge, and the two export links | FR-09, FR-12 |
+| `/tugas/[id]/hasil` | Results table: sortable pseudonym / cognitive level / review column, filter by level, `Perlu Ditinjau` badge, the two export links, and a per-submission **preview of what the export contains** (grades with their names, evidence quotes, review notes, feedback) so a lecturer can check before downloading | FR-09, FR-12 |
 | `/kiriman/[id]` | Split view: the student's analysis with every evidence span highlighted in place, per-score cards with the agent's rationale and its quoted evidence, the override control, the feedback editor, and the boundary correction | FR-05, FR-10, FR-11, FR-14, FR-19 |
 
 Login and sign-up (`/masuk`, `/daftar`) already existed from phase 2 and are unchanged.
@@ -85,6 +85,25 @@ see contradicted a minute later.
   holding, but it will not relabel the run `running` or `done`.
 - Because the run is terminal, the ordinary way to continue is to start a new one — and the results screen
   shows the newest run, which is what a partial run should be compared against anyway.
+
+## Previewing the export
+
+The results screen shows, per submission, what the file will contain — the grades, their evidence quotes, the
+lecturer's review notes and the feedback — because the alternative is a lecturer editing twenty submissions,
+downloading, and finding the file disagreeing with the screen.
+
+That requirement is a rule about *reading the same things*, and building it found two places where the app did
+not:
+
+- the results payload sent `f.generated_text` while the export writes
+  `coalesce(edited_text, generated_text)`, so a preview would have shown the model's text where the file had
+  the lecturer's;
+- the review notes were not in the payload at all, so the screen could not have shown them.
+
+Both now read what the export reads, and a test asserts the preview and the file agree field by field,
+including against the exported CSV. The general rule, recorded because it will apply to the next preview
+somebody builds: **a screen that previews an artefact must read the artefact's own expression, not a
+near-equivalent one.**
 
 ## Overrides and feedback
 
