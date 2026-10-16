@@ -11,7 +11,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Label } from "@/components/ui/label";
 import { API_BASE, api, type AssignmentDetail, type RunResults } from "@/lib/api";
-import { scoreLevel } from "@/lib/labels";
+import { levelLabel, scoreLevel } from "@/lib/labels";
 
 type SortKey = "pseudonym" | "level" | "review";
 
@@ -53,6 +53,7 @@ export default function HasilPage() {
 
   const run = detail?.runs[0] ?? null;
   const scores = results?.submissions ?? [];
+  const levelNames = results?.level_names ?? {};
 
   const rows: Row[] = scores.map((submission) => {
     const indicators: Record<string, string> = {};
@@ -86,7 +87,8 @@ export default function HasilPage() {
       const direction = ascending ? 1 : -1;
       if (sortKey === "pseudonym") return a.pseudonym.localeCompare(b.pseudonym, "id") * direction;
       if (sortKey === "review") return (Number(a.flagged) - Number(b.flagged)) * direction;
-      return scoreLevel(a.level ?? "").localeCompare(scoreLevel(b.level ?? ""), "id", { numeric: true }) * direction;
+      // Sorting stays on the code: the codes are the rubric's own order, while the displayed name is prose.
+      return (a.level ?? "").localeCompare(b.level ?? "", "id", { numeric: true }) * direction;
     });
 
   function toggleSort(key: SortKey) {
@@ -189,7 +191,7 @@ export default function HasilPage() {
                       <option value="">Semua tingkat</option>
                       {levels.map((level) => (
                         <option key={level} value={level}>
-                          {scoreLevel(level)}
+                          {levelLabel(level, levelNames)}
                         </option>
                       ))}
                     </select>
@@ -231,7 +233,9 @@ export default function HasilPage() {
                                   {row.pseudonym}
                                 </Link>
                               </td>
-                              <td className="py-2 pr-4">{row.level === null ? "—" : scoreLevel(row.level)}</td>
+                              <td className="py-2 pr-4">
+                                {row.level === null ? "—" : levelLabel(scoreLevel(row.level), levelNames)}
+                              </td>
                               {indicatorColumns.map((indicator) => (
                                 <td key={indicator} className="py-2 pr-4">
                                   {row.indicators[indicator] === undefined

@@ -13,7 +13,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { api, type Score, type SubmissionDetail } from "@/lib/api";
 import { buildSegments, combinedDocument } from "@/lib/evidence";
-import { flagSentences, scoreLevel } from "@/lib/labels";
+import { flagSentences, levelLabel, scoreLevel } from "@/lib/labels";
 
 const DIMENSION_LABEL: Record<Score["dimension"], string> = {
   cognitive: "Tingkat Kognitif",
@@ -58,6 +58,7 @@ export default function KirimanPage() {
   const text = detail?.student_analysis_text ?? "";
   const segments = detail ? buildSegments(text, detail.scores) : [];
   const levels = detail?.rubric?.levels ?? [];
+  const levelNames = detail?.rubric?.level_names ?? {};
   const storedAi = detail?.ai_output_text ?? "";
   // The offsets sent below index the same string the API splits; see combinedDocument for the rule.
   const combined = combinedDocument(storedAi, text);
@@ -140,7 +141,7 @@ export default function KirimanPage() {
             <span className="font-medium">{DIMENSION_LABEL[score.dimension]}</span>
             <span className="text-muted-foreground">
               {score.indicator ? `${score.indicator} · ` : ""}
-              {scoreLevel(score.level, levels)}
+              {levelLabel(scoreLevel(score.level, levels), levelNames)}
             </span>
             <span className="text-sm text-primary underline underline-offset-4">Lihat kutipan</span>
           </button>
@@ -171,7 +172,9 @@ export default function KirimanPage() {
           {review ? (
             <p className="text-sm text-muted-foreground">
               Tinjauan terakhir:{" "}
-              {review.action === "accept" ? "diterima" : `diubah menjadi ${scoreLevel(review.new_level ?? "", levels)}`}
+              {review.action === "accept"
+                ? "diterima"
+                : `diubah menjadi ${levelLabel(scoreLevel(review.new_level ?? "", levels), levelNames)}`}
               {review.reason ? ` — ${review.reason}` : ""}
             </p>
           ) : null}
@@ -194,7 +197,7 @@ export default function KirimanPage() {
                 >
                   {levels.map((level) => (
                     <option key={level} value={level}>
-                      {level}
+                      {levelLabel(level, levelNames)}
                     </option>
                   ))}
                 </select>

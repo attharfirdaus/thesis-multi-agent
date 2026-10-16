@@ -126,7 +126,13 @@ export type AssignmentDetail = AssignmentSummary & {
   runs: RunSummary[];
 };
 
-export type Rubric = { version: string; levels: string[]; indicators: string[] };
+export type Rubric = {
+  version: string;
+  levels: string[];
+  indicators: string[];
+  /** The rubric's own name per level code (`{"C4": "Analyze"}`); empty when the frozen rubric had none. */
+  level_names: Record<string, string>;
+};
 
 export type Evidence = { quote: string; start_offset: number; end_offset: number };
 
@@ -184,6 +190,8 @@ export type ImportResult = { assignment_id: string; files: ImportedFile[] };
 export type RunResults = {
   run_id: string;
   status: string;
+  /** The run's frozen rubric levels, by code. Empty for a rubric that carried no names. */
+  level_names: Record<string, string>;
   submissions: {
     submission_id: string;
     pseudonym: string;

@@ -18,7 +18,9 @@ import {
   FLAG_FALLBACK,
   FLAG_SENTENCES,
   flagSentences,
+  levelLabel,
   scoreLevel,
+  STRENGTH_WORDS,
   warningSentence,
   warningSentences,
 } from "../lib/labels.ts";
@@ -130,7 +132,8 @@ assert.equal(flagSentences(["some_flag_from_the_future"])[0], FLAG_FALLBACK);
 assert.equal(FLAG_FALLBACK.includes("_"), false);
 assert.equal(flagSentences(["unknown_a", "unknown_b"]).length, 1);
 
-// 10. the presence words never reach the lecturer, and the rubric's own words pass through
+// 10. the presence words never reach the lecturer, the rubric's own words pass through, and the
+//     metacognitive strength words stay themselves even though rubric.levels does not list them
 assert.equal(scoreLevel("absent"), "Tidak ditemukan");
 assert.equal(scoreLevel("present"), "Ada");
 assert.equal(scoreLevel("kuat"), "kuat");
@@ -139,6 +142,29 @@ assert.equal(scoreLevel("kuat", ["lemah", "sedang", "kuat"]), "kuat");
 assert.equal(scoreLevel("absent", ["lemah", "sedang", "kuat"]), "Tidak ditemukan");
 assert.equal(scoreLevel("no_strength", ["lemah", "sedang", "kuat"]), "Tidak ditemukan");
 assert.equal(scoreLevel("C4 - Menganalisis", ["C1", "C4 - Menganalisis"]), "C4 - Menganalisis");
+// The real rubric's `levels` is the cognitive scale alone (["C1".."C6"]), so a strength word must survive
+// it: the strict fallback would otherwise turn every real metacognitive score into "Tidak ditemukan".
+assert.equal(scoreLevel("kuat", ["C1", "C2", "C3", "C4", "C5", "C6"]), "kuat");
+
+// The words themselves come from the backend, so they are read rather than remembered.
+const MODELS_SOURCE = fileURLToPath(new URL("../../backend/app/agents/models.py", import.meta.url));
+const strengthMatch = /^Strength = Literal\[([^\]]+)\]$/m.exec(readFileSync(MODELS_SOURCE, "utf8"));
+assert.notEqual(strengthMatch, null, `no Strength literal found in ${MODELS_SOURCE}`);
+const backendStrengths = (strengthMatch?.[1] ?? "")
+  .split(",")
+  .map((part) => part.trim().replace(/^"|"$/g, ""))
+  .filter(Boolean);
+assert.deepEqual([...backendStrengths].sort(), [...STRENGTH_WORDS].sort());
+for (const word of backendStrengths) {
+  assert.equal(scoreLevel(word, ["C1", "C4"]), word, `${word} must reach the lecturer as itself`);
+}
+
+// 10b. the rubric's name sits beside the code, and a code the rubric does not name stands alone
+assert.equal(levelLabel("C4", { C1: "Remember", C4: "Analyze", C6: "Create" }), "C4 Analyze");
+assert.equal(levelLabel("C1", { C4: "Analyze" }), "C1");
+assert.equal(levelLabel("C4", {}), "C4");
+assert.equal(levelLabel("kuat", { C4: "Analyze" }), "kuat");
+assert.equal(levelLabel(scoreLevel("absent"), { C4: "Analyze" }), "Tidak ditemukan");
 
 // 11. a stored caveat reads as a sentence, including the page-level one, and never as the raw text
 assert.equal(

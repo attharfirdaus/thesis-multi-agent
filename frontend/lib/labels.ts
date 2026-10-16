@@ -26,6 +26,14 @@ export function flagSentences(codes: string[]): string[] {
 }
 
 /**
+ * The metacognitive dimension's words for how strong an indicator is. They are the rubric's words for
+ * that dimension, but they do not sit in `rubric.levels` (which carries the cognitive scale alone), so
+ * they are named here and the runnable check keeps this list equal to `Strength` in
+ * backend/app/agents/models.py.
+ */
+export const STRENGTH_WORDS = ["lemah", "sedang", "kuat"];
+
+/**
  * A metacognitive score stores presence instead of a strength when an agent reports one without the
  * other (`app/agents/persist.py` writes `absent` and `present`). The rubric's own words pass through,
  * and when the rubric's levels are at hand anything outside them is machine vocabulary, not a level.
@@ -37,8 +45,19 @@ const PRESENCE_LEVELS: Record<string, string> = {
 
 export function scoreLevel(level: string, rubricLevels: string[] = []): string {
   if (PRESENCE_LEVELS[level] !== undefined) return PRESENCE_LEVELS[level];
+  if (STRENGTH_WORDS.includes(level)) return level;
   if (rubricLevels.length === 0 || rubricLevels.includes(level)) return level;
   return "Tidak ditemukan";
+}
+
+/**
+ * The rubric's own name for a level, beside its code (`C4 Analyze`). The name comes from the rubric row
+ * the run froze (PRD §13), so a code the rubric does not name is shown alone: inventing a word here would
+ * put a scale in the app that the rubric does not carry.
+ */
+export function levelLabel(level: string, levelNames: Record<string, string>): string {
+  const name = levelNames[level];
+  return name ? `${level} ${name}` : level;
 }
 
 /** What an extraction caveat says, in the lecturer's language (the stored text is English). */
