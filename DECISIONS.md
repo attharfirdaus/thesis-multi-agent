@@ -7,6 +7,65 @@ Every provider/model/library fact cited in this project carries a source URL and
 
 No model or provider decision remains open. The hosting decisions (O-2, O-3, O-5) were re-taken twice — on 2026-10-07 (VM dropped) and again on 2026-10-14 (Cloud Run dropped for a card-free host) — see the newest entries; the older ones are kept as the record of what was chosen and why it changed. What is still open lives in PRD section 14 — the supervisors' metacognitive rubric, institutional ethics clearance, the validation-subset size, the SUS instrument, the feedback-text format, and how the two synthetic calibration examples are validated. The few-shot calibration itself is settled: Atthar supplied it on 2026-10-15.
 
+## 2026-10-17 (later) — FR-05's LLM segmentation fallback, redaction-before-LLM pipeline reorder, and two real bugs it surfaced
+
+Atthar's direct instruction, closing the gap flagged in the previous entry's "LLM-based detection" option:
+"Use an LLM to separate the document's content, and ensure that the identity of the task owner has been
+removed before the LLM separates the content." Decisive enough to build directly rather than re-ask.
+
+**What was built.** `app/ingest/llm_segment.py`: tried only when the rule-based segmenter (`segment.py`)
+finds no label — a labelled document is free, deterministic, already proven, and never needs a model call.
+The returned boundary is verified, never trusted blind: `ai_output_quote` must be a verbatim, locatable
+excerpt or the attempt counts as failed, reusing `app.agents.evidence.locate_quote` (the same discipline the
+grading pipeline already uses for evidence quotes, and the same reason — a model that paraphrases is
+indistinguishable from one that invents a boundary outright). Up to two attempts, the same "retry once" the
+grading pipeline gives an unverified quote (PRD §6).
+
+**The privacy ordering, enforced twice.** `app/routers/ingest.py`'s `_prepare()` redacts the whole document
+(`redact(doc.text)`) *before* ever calling `llm_segment()` — never the per-segment redaction the rule-based
+path uses, since segmentation has not happened yet when the LLM path is tried. Second gate: the egress guard
+already inside `ProviderClient.complete_json` (PRD §11) re-checks the payload regardless, so a mistake in the
+first gate cannot become a leak — `test_llm_segment.py` proves this specifically: fed an unredacted identifier
+directly, the stub transport records zero calls.
+
+**Why `_prepare`/`_persist` split, not just a new module.** A provider call can take several seconds
+(measured 1–7s against Cloudflare this session); the old `upload_submissions` ran extraction, segmentation,
+redaction *and* the Postgres insert inside one transaction, per file, for the whole batch. Adding a network
+call into that would hold a transaction open for the sum of every file's call time — a connection-pool and
+lock-contention risk Neon's free tier does not need. `_prepare` (segment, redact, maybe call the LLM: no
+database) now runs for the whole batch *before* `_persist` (the actual inserts: no external call) opens the
+transaction. Identity capture and redaction-event counting stayed in `_persist`, where they always were fast.
+
+**Bug 1, found live: a capitalised identifier cue was never redacted.** `redact.py`'s `_NAMED_PERSON` pattern
+matched `"nama saya"` / `"saya,"` / `"penulis"` / `"oleh"` case-*sensitively*. A submission whose very first
+sentence read "Nama saya Budi Santoso ..." — capitalised because it opens the document, the single most
+natural place for a student to write it — passed through completely unredacted, confirmed by uploading it to
+the real local backend and reading the stored row back. This is FR-04, P0, "hard dependency" territory: a
+miss here is not a formatting nit. Fixed with a scoped inline flag, `(?i:nama saya|saya,|penulis|oleh)`, so
+only the trigger phrase is case-insensitive — the capture group keeps `[A-Z]`, because requiring a capital
+letter on the *name* is the whole rule that keeps this pattern from over-redacting ordinary lowercase prose.
+Regression test added and mutation-confirmed (removing the scoped flag reproduces the exact live failure).
+This predates tonight's pipeline change; tonight's live testing is what surfaced it.
+
+**Bug 2, found live: the model answered `has_ai_output: true` with no quote at all.** Cloudflare's JSON mode
+is hint-level (DECISIONS.md, O-1) — confirmed again here. `ai_output_quote` had `default=""`, which keeps it
+out of the JSON schema's own `"required"` list; the model read that as permission to skip the field rather
+than write it, consistently, not as a flake (temperature 0 per PRD §11's reproducibility rule, so retrying
+the identical request got the identical non-answer — the retry added for bug mitigation did not help this
+one). Fixed at the root: the field has no default any more, so the schema sent to the model marks it
+required, plus an explicit rule sentence stating so. Verified live, same document, same model: first attempt
+now returns the exact verbatim excerpt. The retry stays — it is still the right defence for genuine
+hallucination, just not for this particular failure mode.
+
+**Verified live, three documents, real Cloudflare model, throwaway account deleted after:** a clear
+AI-answer-then-reflection document segmented correctly (`method: "llm"`, exact text split, name redacted to
+`[REDACTED]` in the stored analysis); a pure student-reflection document correctly reported `has_ai_output:
+false` via the LLM path with the same warning sentence the rule-based "none" path shows; and the egress-guard
+regression proven by a dedicated offline test rather than by trying to engineer a live leak on purpose.
+
+166 backend tests passing (12 new, across `test_llm_segment.py`, `test_ingest_api.py`, `test_redact.py`).
+ruff/mypy clean.
+
 ## 2026-10-17 — FR-05's label recognition widened: the nine archived files all share one author's wording
 
 Atthar flagged that segmentation "relies on overly hard-coded labels; since not all students follow the

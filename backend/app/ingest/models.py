@@ -71,8 +71,10 @@ class Segment(BaseModel):
     start: int
     end: int
     # How the boundary was decided. "lecturer" means a human corrected it, which must survive
-    # a re-run: FR-05 says the auto-segmenter proposes and the lecturer disposes.
-    method: Literal["label", "heuristic", "lecturer"]
+    # a re-run: FR-05 says the auto-segmenter proposes and the lecturer disposes. "llm" is a verified
+    # excerpt from the LLM fallback (app.ingest.llm_segment) — verified meaning `locate_quote` found
+    # it verbatim in the redacted text, never a trusted-blind model claim.
+    method: Literal["label", "heuristic", "llm", "lecturer"]
     confidence: float | None = None
     # The prompt the student gave the AI, when the document labels it. Useful context for the
     # synthesis agent; not the student's own work, so never scored.
@@ -83,7 +85,7 @@ class SegmentationResult(BaseModel):
     ai_output_text: str
     student_analysis_text: str
     segments: list[Segment] = Field(default_factory=list)
-    method: Literal["label", "heuristic", "none"]
+    method: Literal["label", "heuristic", "llm", "none"]
     warnings: list[str] = Field(default_factory=list)
 
     @property

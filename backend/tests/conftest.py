@@ -18,6 +18,15 @@ os.environ["MIGRATION_DATABASE_URL"] = (
     "postgresql://thesis_migrator:migrator_local_pw@localhost:5432/thesis_test"
 )
 os.environ["COOKIE_SECURE"] = "false"
+# Forced blank, not left unset: `Settings` reads `backend/.env` directly when an environment variable
+# is absent (pydantic-settings' own precedence), and that file carries real Cloudflare credentials for
+# local development. Without this, `app.ingest.llm_segment` would make a real network call the moment
+# any test uploads a document with no recognised label — caught live, 2026-10-17, by a test whose
+# assertion then silently matched the real model's (correct, but untested-as-such) answer. Every test
+# that means to exercise the LLM path injects a stub client explicitly instead, the same way
+# `test_graph.py` already does for the grading pipeline.
+for _llm_var in ("LLM_BASE_URL", "LLM_API_KEY", "LLM_MODEL"):
+    os.environ[_llm_var] = ""
 # A throwaway Fernet key and a file inside the test tmp area: never the dev .env's real key or path,
 # so a test run can never touch — or be confused with — a real student's identifiers.
 os.environ["IDENTITY_DB_PATH"] = str(BACKEND / ".pytest_identities.db")

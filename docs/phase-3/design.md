@@ -37,7 +37,9 @@ error: `SegmentationResult.has_ai_output` is false and the whole document is stu
 ## Pipeline
 
 ```
-upload → extract → segment → redact → store (redacted segments only)
+upload → extract → segment (rule-based) → redact → store (redacted segments only)
+                          ↓ no confident label
+                    redact whole document → segment (LLM, 2026-10-17) → store
 ```
 
 - **Extract** (`app/ingest/extract.py`) — per file: PDF via `pdfplumber` (text + tables), DOCX via
@@ -48,14 +50,18 @@ upload → extract → segment → redact → store (redacted segments only)
   widened 2026-10-17 once a real class could not be expected to retype one person's exact wording,
   see DECISIONS.md), heuristic second (a short question-like row followed by a long answer row;
   blank first column means continuation of the previous cell). Records `method` and `confidence` so
-  the UI can propose-and-let-correct (FR-05).
+  the UI can propose-and-let-correct (FR-05). When neither finds a confident label, the LLM fallback
+  (`app/ingest/llm_segment.py`, 2026-10-17) tries once more — on the whole document, redacted first,
+  never the raw text — and verifies its answer the same way the grading pipeline verifies an evidence
+  quote: an excerpt that cannot be located verbatim is not trusted.
 - **Redact** (`app/ingest/redact.py`) — removes identifiers from each segment: labelled names
   (`Nama : …`), student IDs (NIM), emails, phone numbers, personal links, and names appearing in the
   prose. Counts only are logged; the removed values are never stored (FR-04).
 - **Guard** (`app/ingest/guard.py`) — the single egress choke point. Phase 4's provider client calls
   it before every request; if it detects an identifier the call is refused and the submission is
   flagged for review rather than sent. Ingest filtering can miss something; this cannot be bypassed
-  by a new call site because there is only one.
+  by a new call site because there is only one — the LLM segmentation fallback above goes through the
+  exact same `ProviderClient`, so it inherits this check rather than needing its own.
 
 ## What is stored, and what is not
 

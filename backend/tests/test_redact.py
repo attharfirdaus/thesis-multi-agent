@@ -65,6 +65,16 @@ def test_name_after_the_saya_cue_is_removed():
     assert classes(result) == [(RedactionClass.NAMED_PERSON, 1)]
 
 
+def test_a_capitalised_sentence_opening_cue_is_also_removed():
+    """Found live, 2026-10-17: a submission's first sentence read "Nama saya Budi Santoso ..." —
+    capitalised because it opens the document — and was not redacted, because the cue phrase was
+    matched case-sensitively. The name itself must still require a capital letter to be recognised;
+    only the trigger word is case-insensitive."""
+    result = redact("Nama saya Budi Santoso dan saya mahasiswa semester akhir.")
+    assert result.text == f"Nama saya {MARKER} dan saya mahasiswa semester akhir."
+    assert classes(result) == [(RedactionClass.NAMED_PERSON, 1)]
+
+
 def test_marker_is_identical_for_different_students():
     first = redact("Nama : Budi Santoso").text
     second = redact("Nama : Rina Wijaya Putri").text

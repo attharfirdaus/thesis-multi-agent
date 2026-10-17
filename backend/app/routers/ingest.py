@@ -5,9 +5,19 @@ the original document is stored — no filename, no metadata, no raw text — be
 student's name where the extracted text does not have to. The only identifier that survives is the one
 `app.ingest.identity_store` captures, deliberately, so the lecturer knows whose work they are
 reviewing — held outside Neon, in a local encrypted file, never in this app's own tables.
+
+Segmenting and redacting (`_prepare`) are kept apart from inserting rows (`_persist`), and
+`upload_submissions` runs every file's `_prepare` before opening the transaction that runs every
+file's `_persist`. The reason is the LLM segmentation fallback (`app.ingest.llm_segment`, tried when
+the rule-based segmenter finds no label): a provider call can take several seconds, and a Postgres
+transaction held open for that long, once per file in a batch, is a connection-pool and lock-
+contention risk the free-tier database does not need. Identity capture, redaction-event counting and
+the actual insert touch nothing external, so they stay in `_persist`, inside the transaction, as fast
+as they always were.
 """
 
 import uuid
+from dataclasses import dataclass, field
 from typing import Annotated
 
 from fastapi import APIRouter, File, HTTPException, Request, UploadFile, status
@@ -20,9 +30,11 @@ from app.ingest.identity import extract_identity
 from app.ingest.identity_store import delete as delete_identity
 from app.ingest.identity_store import read_many as read_identities
 from app.ingest.identity_store import store as store_identity
-from app.ingest.models import ExtractedDocument
+from app.ingest.llm_segment import llm_segment
+from app.ingest.models import ExtractedDocument, RedactionEvent
 from app.ingest.redact import redact
 from app.ingest.segment import segment
+from app.llm.client import ProviderClient
 from app.routers.auth import CurrentUser
 from app.schemas import ImportedSubmission, ImportResult, SegmentationPatch, SubmissionOut
 from app.security import require_csrf
@@ -53,20 +65,73 @@ def _as_out(row: dict, real_name: str | None = None) -> SubmissionOut:
     )
 
 
-def _store(cur, owner_id: uuid.UUID, assignment_id: uuid.UUID, doc: ExtractedDocument) -> ImportedSubmission:
-    """Segment, redact and persist one extracted document."""
+@dataclass
+class _Prepared:
+    """One extracted document, already segmented and redacted — everything `_persist` needs, with
+    nothing left in it that an external call has not already finished with."""
+
+    doc: ExtractedDocument
+    ai_text: str
+    analysis_text: str
+    method: str
+    has_ai_output: bool
+    warnings: list[str] = field(default_factory=list)
+    redaction_counts: dict[str, int] = field(default_factory=dict)
+
+
+def _prepare(doc: ExtractedDocument, client: ProviderClient | None = None) -> _Prepared:
+    """Segment and redact one extracted document. No database access: a slow LLM call here must
+    never hold the batch's Postgres transaction open (see the module docstring)."""
     result = segment(doc)
-    ai = redact(result.ai_output_text)
-    analysis = redact(result.student_analysis_text)
+    llm_events: list[RedactionEvent] = []
+
+    if result.method != "label":
+        # Rule-based segmentation found no label — every student retypes the assignment template
+        # differently, so this is the normal case, not a failure (DECISIONS.md, 2026-10-17). Redact
+        # the whole document before the LLM ever sees it (PRD §4): the provider client re-checks the
+        # payload again on the way out, but that is the second gate, not the only one.
+        whole = redact(doc.text)
+        llm_result = llm_segment(whole.text, client)
+        if llm_result is not None:
+            result = llm_result
+            llm_events = whole.events  # the one real redaction pass behind this submission's text
+
+    if result.method == "llm":
+        ai_text, analysis_text = result.ai_output_text, result.student_analysis_text
+        events = llm_events
+    else:
+        # Label, or the LLM path was unavailable or untrustworthy and the rule-based guess stands:
+        # either way this text has never been redacted yet.
+        ai = redact(result.ai_output_text)
+        analysis = redact(result.student_analysis_text)
+        ai_text, analysis_text = ai.text, analysis.text
+        events = [*ai.events, *analysis.events]
 
     warnings = [*doc.warnings, *result.warnings]
-    if not analysis.text.strip() and not ai.text.strip():
+    if not analysis_text.strip() and not ai_text.strip():
         warnings.append("No extractable text was found in this file.")
     # The segmenter already reports the no-AI-output case (`segment.NO_AI_WARNING`) because it is the layer
     # that knows how the boundary was decided. The router used to append a second phrasing of the same fact,
     # which is why the lecturer's screen showed that sentence twice (seen live, 2026-10-16): one fact, one
     # warning.
 
+    counts: dict[str, int] = {}
+    for event in events:
+        counts[event.cls.value] = counts.get(event.cls.value, 0) + event.count
+
+    return _Prepared(
+        doc=doc,
+        ai_text=ai_text,
+        analysis_text=analysis_text,
+        method=result.method,
+        has_ai_output=bool(ai_text.strip()),
+        warnings=warnings,
+        redaction_counts=counts,
+    )
+
+
+def _persist(cur, owner_id: uuid.UUID, assignment_id: uuid.UUID, prepared: _Prepared) -> ImportedSubmission:
+    """The database-only half: given an already segmented-and-redacted document, insert its rows."""
     pseudonym = f"S-{uuid.uuid4().hex[:8]}"
     row = cur.execute(
         "insert into submissions (owner_id, assignment_id, pseudonym, ai_output_text, "
@@ -76,10 +141,10 @@ def _store(cur, owner_id: uuid.UUID, assignment_id: uuid.UUID, doc: ExtractedDoc
             owner_id,
             assignment_id,
             pseudonym,
-            ai.text,
-            analysis.text,
-            "segmented" if analysis.text.strip() else "failed",
-            Jsonb(warnings),
+            prepared.ai_text,
+            prepared.analysis_text,
+            "segmented" if prepared.analysis_text.strip() else "failed",
+            Jsonb(prepared.warnings),
         ),
     ).fetchone()
     submission_id = row["id"]
@@ -88,28 +153,25 @@ def _store(cur, owner_id: uuid.UUID, assignment_id: uuid.UUID, doc: ExtractedDoc
     # in this archive, and the labelled line carries it when the student filled the template in.
     # Held outside Neon (DECISIONS.md, 2026-10-16): `identity_store`, never this transaction, never a
     # table an agent's query could ever reach.
-    real_identifier = extract_identity(doc.filename, doc.text)
+    real_identifier = extract_identity(prepared.doc.filename, prepared.doc.text)
     if real_identifier:
         store_identity(submission_id, owner_id, real_identifier)
 
-    counts: dict[str, int] = {}
-    for event in (*ai.events, *analysis.events):
-        counts[event.cls.value] = counts.get(event.cls.value, 0) + event.count
-    for cls, count in counts.items():
+    for cls, count in prepared.redaction_counts.items():
         cur.execute(
             "insert into redaction_events (owner_id, submission_id, cls, count) values (%s, %s, %s, %s)",
             (owner_id, submission_id, cls, count),
         )
 
     return ImportedSubmission(
-        filename=doc.filename,
+        filename=prepared.doc.filename,
         status="imported",
         submission_id=submission_id,
         pseudonym=pseudonym,
-        segmentation_method=result.method,
-        has_ai_output=result.has_ai_output,
-        removed_by_class=counts,
-        warnings=warnings,
+        segmentation_method=prepared.method,
+        has_ai_output=prepared.has_ai_output,
+        removed_by_class=prepared.redaction_counts,
+        warnings=prepared.warnings,
     )
 
 
@@ -125,35 +187,45 @@ def upload_submissions(
     user: CurrentUser,
 ) -> ImportResult:
     require_csrf(request)
-    imported: list[ImportedSubmission] = []
 
     with db.tenant_tx(user.id) as conn, conn.cursor(row_factory=dict_row) as cur:
         exists = cur.execute("select 1 from assignments where id = %s", (assignment_id,)).fetchone()
-        if exists is None:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Assignment not found.")
+    if exists is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Assignment not found.")
 
-        for upload in files:
-            name = upload.filename or "unnamed"
+    imported: list[ImportedSubmission] = []
+    prepared: list[_Prepared] = []
+    for upload in files:
+        name = upload.filename or "unnamed"
+        try:
+            data = upload.file.read()
+            if len(data) > MAX_FILE_BYTES:
+                raise ValueError(f"File is larger than {MAX_FILE_BYTES // (1024 * 1024)} MB.")
+
+            if name.lower().endswith(".zip"):
+                documents, errors = extract_zip(name, data)
+                # Each message already names the offending member, so the zip's own name is
+                # enough in the filename field.
+                imported.extend(
+                    ImportedSubmission(filename=name, status="failed", error=message)
+                    for message in errors
+                )
+            else:
+                documents = [extract(name, data)]
+
+            for doc in documents:
+                prepared.append(_prepare(doc))
+        except Exception as exc:  # one bad file must not fail the batch (FR-03)
+            imported.append(ImportedSubmission(filename=name, status="failed", error=str(exc)))
+
+    with db.tenant_tx(user.id) as conn, conn.cursor(row_factory=dict_row) as cur:
+        for item in prepared:
             try:
-                data = upload.file.read()
-                if len(data) > MAX_FILE_BYTES:
-                    raise ValueError(f"File is larger than {MAX_FILE_BYTES // (1024 * 1024)} MB.")
-
-                if name.lower().endswith(".zip"):
-                    documents, errors = extract_zip(name, data)
-                    # Each message already names the offending member, so the zip's own name is
-                    # enough in the filename field.
-                    imported.extend(
-                        ImportedSubmission(filename=name, status="failed", error=message)
-                        for message in errors
-                    )
-                else:
-                    documents = [extract(name, data)]
-
-                for doc in documents:
-                    imported.append(_store(cur, user.id, assignment_id, doc))
+                imported.append(_persist(cur, user.id, assignment_id, item))
             except Exception as exc:  # one bad file must not fail the batch (FR-03)
-                imported.append(ImportedSubmission(filename=name, status="failed", error=str(exc)))
+                imported.append(
+                    ImportedSubmission(filename=item.doc.filename, status="failed", error=str(exc))
+                )
 
     return ImportResult(assignment_id=assignment_id, files=imported)
 

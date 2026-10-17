@@ -7,6 +7,7 @@ hazard rather than a convenient one.
 """
 
 import io
+import json
 import uuid
 
 import docx
@@ -16,6 +17,7 @@ from psycopg.rows import dict_row
 from app import db
 from app.ingest import identity_store
 from app.ingest.segment import NO_AI_WARNING
+from app.llm.client import Completion
 
 NAME = "Budi Santoso"
 NIM = "28123456"
@@ -198,3 +200,57 @@ def test_another_lecturer_cannot_see_or_touch_the_submission(lecturer):
         json={"analysis_start": 1},
         headers={"X-CSRF-Token": other.cookies.get("ta_csrf")},
     ).status_code == 404
+
+
+def test_an_unlabelled_document_falls_through_to_the_llm_and_the_result_is_stored(lecturer, monkeypatch):
+    """FR-05, end to end through the real upload endpoint: no table, no recognised label, so the rule-
+    based segmenter reports `method="none"` and the LLM fallback is the only way this gets a confident
+    split. The caller must still never send an unredacted identifier — this document carries one.
+    """
+    ai_text = "Berikut adalah definisi risiko menurut ISO 31000 beserta komponennya."
+    analysis_text = f"Analisis saya terhadap definisi ini memerlukan konteks organisasi.\nNama : {NAME}"
+    document = docx.Document()
+    document.add_paragraph(ai_text)
+    document.add_paragraph(analysis_text)
+    buffer = io.BytesIO()
+    document.save(buffer)
+
+    class StubProviderClient:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def complete_json(self, *, system, user, schema, **_kwargs):
+            self.calls += 1
+            assert NAME not in system and NAME not in user, "an unredacted identifier reached the call"
+            return Completion(
+                parsed=schema.model_validate(
+                    json.loads(json.dumps({"has_ai_output": True, "ai_output_quote": ai_text}))
+                ),
+                raw="{}",
+                latency_ms=5,
+                attempts=1,
+            )
+
+    stub = StubProviderClient()
+    monkeypatch.setattr("app.ingest.llm_segment.ProviderClient", lambda: stub)
+
+    entry = upload(
+        lecturer,
+        ("files", ("tanpa_label.docx", buffer.getvalue(), DOCX_MIME)),
+    ).json()["files"][0]
+
+    assert entry["status"] == "imported", entry.get("error") or entry
+    assert entry["segmentation_method"] == "llm"
+    assert stub.calls == 1
+
+    with db.tenant_tx(lecturer["user"]) as conn, conn.cursor(row_factory=dict_row) as cur:
+        stored = cur.execute(
+            "select ai_output_text, student_analysis_text from submissions where id = %s",
+            (entry["submission_id"],),
+        ).fetchone()
+    assert stored["ai_output_text"] == ai_text
+    assert stored["student_analysis_text"] == (
+        "Analisis saya terhadap definisi ini memerlukan konteks organisasi.\nNama : [REDACTED]"
+    )
+    assert NAME not in stored["ai_output_text"]
+    assert NAME not in stored["student_analysis_text"]

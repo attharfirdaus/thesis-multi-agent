@@ -41,9 +41,13 @@ _NIM_CUE = re.compile(r"\b(?:NIM|NIP)\b", re.IGNORECASE)
 _EIGHT_DIGITS = re.compile(r"\b\d{8}\b")
 # A capitalised run is almost always an institution or a product in Indonesian academic prose, so
 # this cue rule over-redacts. That is the safe direction: the marker hides a false positive, whereas
-# a miss leaks a name, and the lecturer sees an over-redaction at review time.
+# a miss leaks a name, and the lecturer sees an over-redaction at review time. The trigger phrase is
+# case-insensitive — "Nama saya ..." opens a sentence as often as "nama saya ..." sits inside one
+# (found live, 2026-10-17: the submission's own first sentence carried a capital "N" and was never
+# redacted) — but only the trigger, via the scoped `(?i:...)` group: the capture itself still
+# requires `[A-Z]`, because a name is exactly what the rest of this rule is trying to recognise.
 _NAMED_PERSON = re.compile(
-    r"\b(?:nama saya|saya,|penulis|oleh)\s*:?\s*([A-Z][A-Za-z']*(?:\s+[A-Z][A-Za-z']*){1,3})"
+    r"\b(?i:nama saya|saya,|penulis|oleh)\s*:?\s*([A-Z][A-Za-z']*(?:\s+[A-Z][A-Za-z']*){1,3})"
 )
 
 _FORMAT_PATTERNS = (

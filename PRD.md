@@ -82,7 +82,7 @@ P0 items make up the MVP the thesis demonstration needs; P1 items support valida
 | FR-02 | Assignment CRUD: title, course, assignment prompt, rubric reference | P0 |
 | FR-03 | Batch upload of PDF, DOCX, TXT and ZIP; text extraction; per-file error reporting without failing the batch | P0 |
 | FR-04 | Data minimisation and pseudonymisation on ingest: student identifiers are removed from the text rather than merely relabelled (name, NIM, email, phone, and anything found in headers, footers, filenames, document metadata, tables or the text itself); the mapping is held outside the application database, in a local encrypted store scoped to its owner (2026-10-16: moved out of Neon, see DECISIONS.md); and the exact payload sent to any provider is re-checked at the provider client, which blocks the call and flags the submission for review if an identifier is present | P0 |
-| FR-05 | Segment each submission into AI output vs student analysis. Auto-segment, then let the lecturer correct the boundary | P0 |
+| FR-05 | Segment each submission into AI output vs student analysis: rule-based first (label, then a row-shape heuristic), an LLM fallback second when neither finds a confident boundary (2026-10-17, on text already redacted — see DECISIONS.md), then let the lecturer correct the boundary | P0 |
 | FR-06 | Asynchronous evaluation jobs with per-submission status, retry on failure, and resumable runs | P0 |
 | FR-07 | Cognitive score: Bloom level per student analysis, from the cognitive agent (LLM with mandatory few-shot calibration, section 6), with the evidence span and a rationale | P0 |
 | FR-08 | Metacognitive score: per-indicator presence and strength, each with quoted evidence and rationale | P0 |
