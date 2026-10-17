@@ -34,13 +34,22 @@ from app.ingest.models import (
 
 Method = Literal["label", "heuristic"]
 
-ANALYSIS_LABEL = "critical review"
-PROMPT_LABEL = "prompt"
-ANSWER_LABEL = "hasil"
-LABELS = frozenset({ANALYSIS_LABEL, PROMPT_LABEL, ANSWER_LABEL})
-# `| Prompt | Hasil |` names the two columns. Treating "Hasil" as content would put a table header
-# into the AI answer it heads.
-HEADER_CELLS = frozenset({PROMPT_LABEL, ANSWER_LABEL})
+# The nine archived files that shaped this module are all one person's own coursework (phase-3
+# design doc), so every one of them happens to use the exact same three words. A real class will
+# not: a student retyping the assignment template into their own words is still "the same column",
+# just in different wording. Each set below is the direct bilingual translation of the word already
+# observed in the corpus, not an invented vocabulary — "prompt" is English, so its Indonesian
+# equivalent is added; "hasil" and "critical review" the same way, plus one same-language synonym
+# each that a student plausibly types ("jawaban" for an AI answer, "ulasan kritis" for a review).
+# Broadening this list is the whole fix: no other code below cares how many words are recognised,
+# since `LABELS` and `HEADER_CELLS` are computed from these sets, not re-listed by hand.
+ANALYSIS_LABELS = frozenset({"critical review", "tinjauan kritis", "ulasan kritis"})
+PROMPT_LABELS = frozenset({"prompt", "pertanyaan", "soal"})
+ANSWER_LABELS = frozenset({"hasil", "jawaban", "answer", "jawaban ai"})
+LABELS = ANALYSIS_LABELS | PROMPT_LABELS | ANSWER_LABELS
+# `| Prompt | Hasil |` names the two columns, in whichever recognised words a file uses. Treating
+# "Hasil" (or "Jawaban") as content would put a table header into the AI answer it heads.
+HEADER_CELLS = PROMPT_LABELS | ANSWER_LABELS
 
 # A label decides a boundary; a guess does not. The gap is what the UI keys off to ask the lecturer
 # to check the low-confidence segment.
@@ -180,13 +189,13 @@ def _segment_labelled(blocks: Sequence[Block]) -> list[_Run]:
         label = _label_of(block)
         body = _body_of(block, drop_label=label in LABELS)
 
-        if label == ANALYSIS_LABEL:
+        if label in ANALYSIS_LABELS:
             current = SegmentKind.STUDENT_ANALYSIS
             _add(runs, current, body, "label", LABEL_CONFIDENCE)
 
-        elif label in (PROMPT_LABEL, ANSWER_LABEL):
+        elif label in PROMPT_LABELS or label in ANSWER_LABELS:
             current = SegmentKind.AI_OUTPUT
-            if label == PROMPT_LABEL:
+            if label in PROMPT_LABELS:
                 if body and body.casefold() not in HEADER_CELLS:
                     # The student's question is context for the answer, never AI output, so it is
                     # carried on the segment instead of concatenated into the text that gets scored.

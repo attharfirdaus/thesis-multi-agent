@@ -43,10 +43,12 @@ upload → extract → segment → redact → store (redacted segments only)
 - **Extract** (`app/ingest/extract.py`) — per file: PDF via `pdfplumber` (text + tables), DOCX via
   `python-docx` (real cell structure), TXT read directly, ZIP unpacked and each member dispatched by
   extension. One failing file must not fail the batch (FR-03): the failure is reported per file.
-- **Segment** (`app/ingest/segment.py`) — label-driven first (first-column cell equals
-  `Critical Review`, case-insensitively), heuristic second (a short question-like row followed by a
-  long answer row; blank first column means continuation of the previous cell). Records `method` and
-  `confidence` so the UI can propose-and-let-correct (FR-05).
+- **Segment** (`app/ingest/segment.py`) — label-driven first (first-column cell matches a recognised
+  word for its role — `Critical Review`/`Prompt`/`Hasil` and their direct Indonesian translations,
+  widened 2026-10-17 once a real class could not be expected to retype one person's exact wording,
+  see DECISIONS.md), heuristic second (a short question-like row followed by a long answer row;
+  blank first column means continuation of the previous cell). Records `method` and `confidence` so
+  the UI can propose-and-let-correct (FR-05).
 - **Redact** (`app/ingest/redact.py`) — removes identifiers from each segment: labelled names
   (`Nama : …`), student IDs (NIM), emails, phone numbers, personal links, and names appearing in the
   prose. Counts only are logged; the removed values are never stored (FR-04).

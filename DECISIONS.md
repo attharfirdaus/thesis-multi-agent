@@ -7,6 +7,45 @@ Every provider/model/library fact cited in this project carries a source URL and
 
 No model or provider decision remains open. The hosting decisions (O-2, O-3, O-5) were re-taken twice — on 2026-10-07 (VM dropped) and again on 2026-10-14 (Cloud Run dropped for a card-free host) — see the newest entries; the older ones are kept as the record of what was chosen and why it changed. What is still open lives in PRD section 14 — the supervisors' metacognitive rubric, institutional ethics clearance, the validation-subset size, the SUS instrument, the feedback-text format, and how the two synthetic calibration examples are validated. The few-shot calibration itself is settled: Atthar supplied it on 2026-10-15.
 
+## 2026-10-17 — FR-05's label recognition widened: the nine archived files all share one author's wording
+
+Atthar flagged that segmentation "relies on overly hard-coded labels; since not all students follow the
+assignment format corresponding to those labels, the system should be made more dynamic." Grounded: the
+whole segmenter was built and validated against nine archived files, all Atthar's own coursework (phase-3
+design doc), so every one happens to use the identical three words — `Prompt` / `Hasil` / `Critical Review`.
+A real class will not all type the template back in the same words.
+
+**Asked before building** (no new real submissions to inspect, so nothing to ground a specific fix beyond
+reasoning from the existing design): which direction — broaden the recognised word list, detect the table
+structure itself regardless of wording, let the lecturer configure the words, or detect the boundary with the
+already-configured LLM. The direction question went unanswered twice. Decided by the agent, conservatively,
+and stated before building rather than silently picked: broaden the word list. The other three were set aside
+with reasons, not by default — structural detection is a nontrivial algorithm change that cannot be validated
+against real format variety without data that does not exist yet; lecturer-configured labels assume the
+variance is *between* assignments rather than *within* one class, which is unconfirmed; LLM-based detection
+would need segmentation to run on text `redact()` has not yet touched, meaning raw text reaches an LLM before
+identifiers are removed — a direct conflict with FR-04 unless the pipeline order changes, which is a bigger
+decision than this one.
+
+**What changed**, `backend/app/ingest/segment.py`: `ANALYSIS_LABEL` / `PROMPT_LABEL` / `ANSWER_LABEL`
+(single strings) became `ANALYSIS_LABELS` / `PROMPT_LABELS` / `ANSWER_LABELS` (small sets). Each addition is
+the direct bilingual translation of the word already observed in the corpus — "prompt" is English, so its
+Indonesian equivalent is now recognised too; "hasil" and "critical review" the same way — plus one
+same-language synonym each a student plausibly types (`jawaban`, `ulasan kritis`). Not an invented vocabulary:
+every added word is a direct translation or an obvious synonym of a word already proven to appear in real
+files, nothing further. The two-tier design is unchanged — anything still unrecognised falls to the existing
+low-confidence heuristic guess, which the lecturer corrects (FR-05's own fallback), so this narrows how often
+that fallback is needed rather than replacing it.
+
+**Verified live** (throwaway account, real backend, deleted after): uploaded a `.docx` built with
+`python-docx` using only the Indonesian words (`Pertanyaan` / `Jawaban` / `Ulasan Kritis`, none of them in the
+original three) — `segmentation_method: "label"`, not the heuristic fallback, and the stored
+`ai_output_text` / `student_analysis_text` split exactly on the intended boundary. One test in
+`test_segment.py` had to change: `"Pertanyaan"` was previously used as filler text inside a heuristic-path
+fixture precisely because it was *not* a recognised label; it now is, so that fixture's cell was swapped for
+unambiguous filler (`"No. 1"`) to keep testing what it always tested — mutation-confirmed (reverting the new
+words to the original three makes the new Indonesian-label test fail with `method == "none"`).
+
 ## 2026-10-16 (deepest night) — FR-04 changed: the real identifier moves out of Neon, resolving the residual risk from O-4 (2026-10-14)
 
 Atthar asked whether the lecturer's screen can keep showing a student's real name while the agent pipeline

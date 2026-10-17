@@ -65,6 +65,29 @@ def test_labelled_document_splits_ai_output_from_analysis():
     _assert_offsets(result)
 
 
+def test_a_student_who_relabels_the_same_columns_in_indonesian_still_segments_by_label():
+    """The archived files all happen to use the same three words (one person's own coursework,
+    phase-3 design doc) — a real class will not. This is the same shape as `_canonical()`, with the
+    direct Indonesian translation of every column word instead, and must still land on `method ==
+    "label"`, not fall through to the low-confidence guess."""
+    result = segment(
+        _doc(
+            _row("Pertanyaan", "Jawaban"),
+            _row("Pertanyaan", QUESTION),
+            _row("Jawaban", "UU ITE mengatur informasi dan transaksi elektronik."),
+            _row("Ulasan Kritis", "Menurut saya pasal ini masih tumpang tindih dengan KUHP."),
+        )
+    )
+
+    assert result.method == "label"
+    assert result.ai_output_text == "UU ITE mengatur informasi dan transaksi elektronik."
+    assert result.student_analysis_text == "Menurut saya pasal ini masih tumpang tindih dengan KUHP."
+    ai, analysis = result.segments
+    assert ai.confidence == LABEL_CONFIDENCE
+    assert analysis.confidence == LABEL_CONFIDENCE
+    _assert_offsets(result)
+
+
 def test_prompt_and_answer_rows_may_hold_their_text_in_their_own_rows():
     """`| Prompt | <question> |` then `| Hasil | <answer> |`: the question is context, not output."""
     result = segment(
@@ -206,8 +229,10 @@ def test_unlabelled_short_and_long_rows_without_a_question_stay_with_the_student
 
 
 def test_short_row_ending_in_a_question_mark_is_still_guessed_as_a_question():
+    """"Pertanyaan" is now a recognised label word, so this uses a cell that is not one — the
+    trailing "?" is what the heuristic actually keys on, not this particular wording."""
     answer = ("Jawaban panjang dari AI tentang risiko proyek. " * 16).strip()
-    result = segment(_doc(_row("Pertanyaan", "Apa saja risiko utamanya?"), _row(answer)))
+    result = segment(_doc(_row("No. 1", "Apa saja risiko utamanya?"), _row(answer)))
 
     assert result.method == "heuristic"
     assert result.ai_output_text == answer
@@ -217,7 +242,7 @@ def test_short_row_ending_in_a_question_mark_is_still_guessed_as_a_question():
     ai = result.segments[0]
     assert ai.method == "heuristic"
     assert ai.confidence is not None and ai.confidence < LABEL_CONFIDENCE
-    assert ai.prompt_text == "Pertanyaan | Apa saja risiko utamanya?"
+    assert ai.prompt_text == "No. 1 | Apa saja risiko utamanya?"
     _assert_offsets(result)
 
 
