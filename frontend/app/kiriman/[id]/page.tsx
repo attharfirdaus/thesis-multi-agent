@@ -19,6 +19,7 @@ import {
   flagSentences,
   levelLabel,
   scoreLevel,
+  spreadLabel,
   submissionLabel,
 } from "@/lib/labels";
 
@@ -167,7 +168,9 @@ export default function KirimanPage() {
     }
   }
 
-  function scoreCard(score: Score) {
+  /** One score with its review and comment controls. `inSegment` marks a segment label (KF-09), whose
+   *  quote is not one of the text-level highlights, so it offers no jump to them. */
+  function scoreCard(score: Score, inSegment = false) {
     // An indicator is nominal (Bab II.2.4): the lecturer corrects presence, not a Bloom level.
     const options = score.dimension === "metacognitive" ? PRESENCE_OPTIONS : levels;
     const review = [...(detail?.reviews ?? [])].reverse().find((item) => item.system_score_id === score.id);
@@ -184,8 +187,16 @@ export default function KirimanPage() {
               {score.indicator ? `${score.indicator} · ` : ""}
               {levelLabel(scoreLevel(score.level, levels), levelNames)}
             </span>
-            <span className="text-sm text-primary underline underline-offset-4">Lihat kutipan</span>
+            {inSegment ? null : (
+              <span className="text-sm text-primary underline underline-offset-4">Lihat kutipan</span>
+            )}
           </button>
+
+          {score.distribution ? (
+            <p className="text-sm text-muted-foreground">
+              Sebaran tingkat (jumlah segmen): {spreadLabel(score.distribution)}
+            </p>
+          ) : null}
 
           <div>
             <p className="text-sm font-medium">Penjelasan</p>
@@ -405,7 +416,7 @@ export default function KirimanPage() {
                   </CardContent>
                 </Card>
               ) : (
-                detail.scores.map(scoreCard)
+                detail.scores.map((score) => scoreCard(score))
               )}
 
               {detail.segment_scores?.length ? (
@@ -414,40 +425,34 @@ export default function KirimanPage() {
                     <CardTitle>Penilaian per segmen</CardTitle>
                     <CardDescription>
                       Analisis dinilai per kalimat. Tingkat kognitif teks adalah tingkat tertinggi dari segmen,
-                      dan indikator teks adalah indikator yang muncul di segmen mana pun.
+                      dan indikator teks adalah indikator yang muncul di segmen mana pun. Buka satu segmen untuk
+                      menerima, mengubah, atau mengomentari labelnya.
                     </CardDescription>
                   </CardHeader>
-                  <CardContent className="overflow-x-auto">
-                    <table className="w-full text-left text-sm">
-                      <thead>
-                        <tr className="border-b">
-                          <th className="py-2 pr-3 font-medium">No.</th>
-                          <th className="py-2 pr-3 font-medium">Segmen</th>
-                          <th className="py-2 pr-3 font-medium">Tingkat Kognitif</th>
-                          <th className="py-2 font-medium">Indikator Metakognitif</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {[...new Set(detail.segment_scores.map((s) => s.segment_index))].map((index) => {
-                          const rows = detail.segment_scores!.filter((s) => s.segment_index === index);
-                          const cognitive = rows.find((s) => s.dimension === "cognitive");
-                          const present = rows
-                            .filter((s) => s.dimension === "metacognitive" && s.level !== "absent")
-                            .map((s) => s.indicator);
-                          const unit = rows[0];
-                          return (
-                            <tr key={index} className="border-b align-top">
-                              <td className="py-2 pr-3">{index}</td>
-                              <td className="py-2 pr-3">{text.slice(unit.segment_start, unit.segment_end)}</td>
-                              <td className="py-2 pr-3 whitespace-nowrap">
-                                {cognitive ? levelLabel(scoreLevel(cognitive.level, levels), levelNames) : "—"}
-                              </td>
-                              <td className="py-2">{present.length ? present.join(", ") : "—"}</td>
-                            </tr>
-                          );
-                        })}
-                      </tbody>
-                    </table>
+                  <CardContent className="flex flex-col gap-2">
+                    {[...new Set(detail.segment_scores.map((s) => s.segment_index))].map((index) => {
+                      const rows = detail.segment_scores!.filter((s) => s.segment_index === index);
+                      const cognitive = rows.find((s) => s.dimension === "cognitive");
+                      const present = rows
+                        .filter((s) => s.dimension === "metacognitive" && s.level !== "absent")
+                        .map((s) => s.indicator);
+                      const unit = rows[0];
+                      return (
+                        <details key={index} className="rounded-lg border p-3">
+                          <summary className="cursor-pointer">
+                            <span className="font-medium">Segmen {index}</span>
+                            {" · "}
+                            {cognitive ? levelLabel(scoreLevel(cognitive.level, levels), levelNames) : "—"}
+                            {" · "}
+                            {present.length ? present.join(", ") : "tanpa indikator"}
+                          </summary>
+                          <div className="mt-3 flex flex-col gap-3">
+                            <p className="border-l-2 pl-3">{text.slice(unit.segment_start, unit.segment_end)}</p>
+                            {rows.map((score) => scoreCard(score, true))}
+                          </div>
+                        </details>
+                      );
+                    })}
                   </CardContent>
                 </Card>
               ) : null}

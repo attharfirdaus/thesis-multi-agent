@@ -25,6 +25,7 @@ from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 
 from app import db
+from app.agents.segments import split_segments, stored
 from app.ingest.extract import extract, extract_zip
 from app.ingest.identity import extract_identity
 from app.ingest.identity_store import delete as delete_identity
@@ -135,8 +136,8 @@ def _persist(cur, owner_id: uuid.UUID, assignment_id: uuid.UUID, prepared: _Prep
     pseudonym = f"S-{uuid.uuid4().hex[:8]}"
     row = cur.execute(
         "insert into submissions (owner_id, assignment_id, pseudonym, ai_output_text, "
-        "student_analysis_text, segmentation_status, import_warnings) "
-        "values (%s, %s, %s, %s, %s, %s, %s) returning id",
+        "student_analysis_text, segmentation_status, import_warnings, analysis_segments) "
+        "values (%s, %s, %s, %s, %s, %s, %s, %s) returning id",
         (
             owner_id,
             assignment_id,
@@ -145,6 +146,8 @@ def _persist(cur, owner_id: uuid.UUID, assignment_id: uuid.UUID, prepared: _Prep
             prepared.analysis_text,
             "segmented" if prepared.analysis_text.strip() else "failed",
             Jsonb(prepared.warnings),
+            # KF-05: the assessed segments are stored at import, before any measurement starts.
+            Jsonb(stored(split_segments(prepared.analysis_text))),
         ),
     ).fetchone()
     submission_id = row["id"]
@@ -311,8 +314,10 @@ def correct_segmentation(
 
         updated = cur.execute(
             f"update submissions set ai_output_text = %s, student_analysis_text = %s, "  # noqa: S608
-            f"segmentation_status = 'confirmed' where id = %s returning {_SUBMISSION_COLUMNS}",
-            (ai_text, analysis_text, submission_id),
+            f"analysis_segments = %s, segmentation_status = 'confirmed' "
+            f"where id = %s returning {_SUBMISSION_COLUMNS}",
+            # A moved boundary changes the analysis, so its stored segments are re-split with it (KF-05).
+            (ai_text, analysis_text, Jsonb(stored(split_segments(analysis_text))), submission_id),
         ).fetchone()
         if updated is None:  # the row cannot vanish inside the transaction; satisfies the type checker
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Submission not found.")

@@ -87,6 +87,17 @@ export function levelLabel(level: string, levelNames: Record<string, string>): s
   return name ? `${level} ${name}` : level;
 }
 
+/**
+ * KF-07's level spread, `{rendah: 1, menengah: 2, tinggi: 0}`, as one readable line. The group names are
+ * the rubric's own (Bab III.6), so they are shown as stored, capitalised.
+ */
+export function spreadLabel(distribution?: Record<string, number> | null): string {
+  if (!distribution || Object.keys(distribution).length === 0) return "—";
+  return Object.entries(distribution)
+    .map(([group, count]) => `${group.charAt(0).toUpperCase()}${group.slice(1)} ${count}`)
+    .join(" · ");
+}
+
 /** What an extraction caveat says, in the lecturer's language (the stored text is English). */
 const WARNING_SENTENCES: Record<string, string> = {
   "no AI segment was detected; the student's analysis covers the whole document":

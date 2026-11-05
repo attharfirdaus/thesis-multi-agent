@@ -86,7 +86,7 @@ def _calibration(state: GraphState) -> dict[str, Any]:
 
 
 def preprocess(state: GraphState) -> dict[str, Any]:
-    """Split the analysis into the assessed segments (Bab III.6). No model call.
+    """The assessed segments of the analysis (Bab III.6). No model call.
 
     The text was redacted in phase 3 and is re-checked by the provider client before it leaves, so
     there is nothing to clean here. An empty analysis cannot be scored, and failing here costs no
@@ -98,9 +98,11 @@ def preprocess(state: GraphState) -> dict[str, Any]:
             "student analysis is empty: the submission was not segmented or its analysis segment "
             "is blank, so there is nothing to evaluate"
         )
-    # Offsets of the segments, and of every quote later, point into the text exactly as stored: it is
-    # not stripped here, because the detail view re-slices the stored string.
-    return {"segments": split_segments(text)}
+    # The worker passes the split stored before measurement (KF-05); a caller without one (the tests,
+    # a row from before migration 0008) gets the same rule applied here. Offsets of the segments, and of
+    # every quote later, point into the text exactly as stored: it is not stripped here, because the
+    # detail view re-slices the stored string.
+    return {"segments": state.get("segments") or split_segments(text)}
 
 
 def _client(client: ProviderClient | None) -> ProviderClient:

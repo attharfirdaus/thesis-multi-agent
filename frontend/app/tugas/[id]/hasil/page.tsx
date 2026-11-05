@@ -11,7 +11,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Label } from "@/components/ui/label";
 import { API_BASE, api, type AssignmentDetail, type RunResults } from "@/lib/api";
-import { levelLabel, modeLabel, scoreLevel, submissionLabel } from "@/lib/labels";
+import { levelLabel, modeLabel, scoreLevel, spreadLabel, submissionLabel } from "@/lib/labels";
 
 type SortKey = "pseudonym" | "level" | "review";
 
@@ -20,6 +20,8 @@ type Row = {
   pseudonym: string;
   real_name: string | null;
   level: string | null;
+  /** KF-07: the spread of segments over the level groups, beside the highest level. */
+  spread: string;
   indicators: Record<string, string>;
   flagged: boolean;
   /** The source submission, so the preview shows exactly what the export is built from. */
@@ -145,6 +147,7 @@ export default function HasilPage() {
       pseudonym: submission.pseudonym,
       real_name: submission.real_name ?? null,
       level: submission.scores.find((score) => score.dimension === "cognitive")?.level ?? null,
+      spread: spreadLabel(submission.scores.find((score) => score.dimension === "cognitive")?.distribution),
       indicators,
       flagged: (submission.review_flags ?? []).length > 0,
       source: submission,
@@ -250,17 +253,18 @@ export default function HasilPage() {
                   </div>
                   <p className="flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
                     Status penilaian: <StatusBadge {...runStatus(run.status)} />
+                    {/* The mode names the agents, a technical term kept to the admin area (Bab III.3). */}
                     {run.mode ? (
-                      <>
+                      <AdminOnly>
                         Mode: <StatusBadge tone="neutral" label={modeLabel(run.mode)} />
-                      </>
+                      </AdminOnly>
                     ) : null}
                   </p>
                   {run.model_unavailable ? (
                     <Alert variant="destructive">
                       <AlertDescription>
-                        Model yang dipakai penilaian ini sudah tidak tersedia pada penyedia, sehingga kiriman
-                        yang tersisa tidak dinilai dengan model lain.
+                        Layanan penilai yang dipakai penilaian ini sudah tidak tersedia, sehingga kiriman yang
+                        tersisa tidak dinilai dengan layanan lain.
                       </AlertDescription>
                     </Alert>
                   ) : null}
@@ -326,6 +330,9 @@ export default function HasilPage() {
                           <tr className="border-b">
                             {sortableHeader("pseudonym", "Pseudonim")}
                             {sortableHeader("level", "Tingkat Kognitif")}
+                            <th scope="col" className="py-2 pr-4 font-medium">
+                              Sebaran Tingkat
+                            </th>
                             {indicatorColumns.map((indicator) => (
                               <th key={indicator} scope="col" className="py-2 pr-4 font-medium">
                                 {indicator}
@@ -355,6 +362,7 @@ export default function HasilPage() {
                               <td className="py-2 pr-4">
                                 {row.level === null ? "—" : levelLabel(scoreLevel(row.level), levelNames)}
                               </td>
+                              <td className="py-2 pr-4 whitespace-nowrap">{row.spread}</td>
                               {indicatorColumns.map((indicator) => (
                                 <td key={indicator} className="py-2 pr-4">
                                   {row.indicators[indicator] === undefined
@@ -388,7 +396,7 @@ export default function HasilPage() {
                               </tr>
                               {expandedId === row.id ? (
                                 <tr id={`pratinjau-${row.id}`} className="border-b">
-                                  <td colSpan={4 + indicatorColumns.length} className="py-3">
+                                  <td colSpan={5 + indicatorColumns.length} className="py-3">
                                     <ExportPreview
                                       submission={row.source}
                                       levelNames={levelNames}

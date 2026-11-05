@@ -100,6 +100,8 @@ class ScoreOut(BaseModel):
     #: The lecturer's newest review of this score, or None when nobody has judged it. The dialog needs the
     #: reason next to the grade it overrides, which is also how the export pairs them.
     review: ReviewOut | None = None
+    #: KF-07: segments per level group, on the text-level cognitive score only.
+    distribution: dict[str, int] | None = None
 
 
 class SubmissionResultOut(BaseModel):
@@ -238,6 +240,8 @@ class SubmissionScoreOut(BaseModel):
     rationale: str | None = None
     evidence: list[EvidenceOut] = Field(default_factory=list)
     comments: list[CommentOut] = Field(default_factory=list)
+    # KF-07: segments per level group, on the text-level cognitive score only.
+    distribution: dict[str, int] | None = None
 
 
 class SegmentScoreOut(BaseModel):
@@ -252,6 +256,8 @@ class SegmentScoreOut(BaseModel):
     level: str
     rationale: str | None = None
     evidence: list[EvidenceOut] = Field(default_factory=list)
+    # KF-09: a segment label is accepted, corrected or commented on like a text-level score.
+    comments: list[CommentOut] = Field(default_factory=list)
 
 
 ExclusionReason = Literal["calibration_source", "author_own", "unreadable_or_unsegmentable"]

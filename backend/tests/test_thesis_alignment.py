@@ -4,6 +4,7 @@ the model-unavailable flag."""
 
 import csv
 import io
+import json
 
 from conftest import INDICATORS, QUOTE_COGNITIVE, make_admin
 
@@ -269,3 +270,113 @@ def test_a_run_whose_model_changed_is_flagged_not_silently_rescored(seeded, monk
         assert (
             conn.execute("select count(*) from system_scores where run_id = %s", (run_id,)).fetchone()[0] == 0
         )
+
+
+# --------------------------------------------------------------------------- 2026-11-05 (BAB 3 of 5 Nov)
+
+
+def test_the_split_is_stored_at_import_and_scored_as_stored(seeded):
+    """KF-05: the identified segments are stored before measurement, and a run scores the stored units —
+    not a fresh split — so a later change of the rule cannot move what the raters labelled."""
+    with db.tenant_tx(seeded["user"]) as conn:
+        stored = conn.execute(
+            "select analysis_segments from submissions where id = %s", (seeded["submission"],)
+        ).fetchone()[0]
+        assert [item["index"] for item in stored] == [1, 2, 3]
+        # Pretend the rule changed after the split was stored: merge the first two stored units into one.
+        merged = [
+            {**stored[0], "end": stored[1]["end"], "text": "dua kalimat jadi satu"},
+            {**stored[2], "index": 2},
+        ]
+        conn.execute(
+            "update submissions set analysis_segments = %s where id = %s",
+            (json.dumps(merged), seeded["submission"]),
+        )
+    client = seeded["client"]
+    run_id = client.post(f"/assignments/{seeded['assignment']}/runs", headers=_csrf(seeded)).json()["id"]
+    client.post(f"/runs/{run_id}/process?limit=5", headers=_csrf(seeded))
+    assert any("[1] dua kalimat jadi satu" in user for user in seeded["stub"].users)
+
+
+def test_a_row_without_a_stored_split_gets_one_before_it_is_scored(seeded):
+    """Rows imported before migration 0008 hold no split; the worker stores the rule's split first."""
+    with db.tenant_tx(seeded["user"]) as conn:
+        conn.execute("update submissions set analysis_segments = null where id = %s", (seeded["submission"],))
+    client = seeded["client"]
+    run_id = client.post(f"/assignments/{seeded['assignment']}/runs", headers=_csrf(seeded)).json()["id"]
+    client.post(f"/runs/{run_id}/process?limit=5", headers=_csrf(seeded))
+    with db.tenant_tx(seeded["user"]) as conn:
+        stored = conn.execute(
+            "select analysis_segments from submissions where id = %s", (seeded["submission"],)
+        ).fetchone()[0]
+    assert [item["index"] for item in stored] == [1, 2, 3]
+
+
+def test_moving_the_boundary_re_splits_the_stored_segments(seeded):
+    client = seeded["client"]
+    detail = client.get(f"/submissions/{seeded['submission']}").json()
+    combined = f"{detail['ai_output_text']}\n{detail['student_analysis_text']}"
+    start = combined.index(detail["student_analysis_text"].split(". ")[1])  # drop the first sentence
+    assert client.patch(
+        f"/submissions/{seeded['submission']}/segmentation",
+        json={"analysis_start": start},
+        headers=_csrf(seeded),
+    ).status_code == 200
+    with db.tenant_tx(seeded["user"]) as conn:
+        text, stored = conn.execute(
+            "select student_analysis_text, analysis_segments from submissions where id = %s",
+            (seeded["submission"],),
+        ).fetchone()
+    assert [item["text"] for item in stored] == [text[item["start"] : item["end"]] for item in stored]
+    assert len(stored) == 2
+
+
+def test_the_text_level_summary_carries_the_level_distribution(scored_run, seeded):
+    """KF-07 / Bab III.6: highest level AND the spread over the three level groups."""
+    detail = seeded["client"].get(f"/submissions/{seeded['submission']}").json()
+    cognitive = next(s for s in detail["scores"] if s["dimension"] == "cognitive")
+    assert cognitive["level"] == "C4"
+    assert cognitive["distribution"] == {"rendah": 1, "menengah": 2, "tinggi": 0}
+    results = seeded["client"].get(f"/runs/{scored_run}/results").json()
+    summary = next(s for s in results["submissions"][0]["scores"] if s["dimension"] == "cognitive")
+    assert summary["distribution"] == {"rendah": 1, "menengah": 2, "tinggi": 0}
+
+
+def test_a_segment_label_can_be_corrected_and_commented(scored_run, seeded):
+    """KF-09: every segment label, not only the text-level score, takes an accept, a correction and a
+    comment, and the detail view returns them."""
+    client = seeded["client"]
+    detail = client.get(f"/submissions/{seeded['submission']}").json()
+    label = next(s for s in detail["segment_scores"] if s["dimension"] == "cognitive")
+    assert client.post(
+        f"/system_scores/{label['id']}/review",
+        json={"action": "override", "new_level": "C5", "reason": "menilai klaim"},
+        headers=_csrf(seeded),
+    ).status_code == 201
+    assert client.post(
+        f"/system_scores/{label['id']}/comments", json={"body": "cek ulang"}, headers=_csrf(seeded)
+    ).status_code == 201
+    detail = client.get(f"/submissions/{seeded['submission']}").json()
+    again = next(s for s in detail["segment_scores"] if s["id"] == label["id"])
+    assert [c["body"] for c in again["comments"]] == ["cek ulang"]
+    assert any(r["system_score_id"] == label["id"] and r["new_level"] == "C5" for r in detail["reviews"])
+
+
+def test_the_rater_sheet_has_context_label_columns_and_a_per_rater_order(scored_run, seeded):
+    """Bab III.7: segments with the whole analysis and the AI output as context, columns for one level,
+    each indicator and 'cannot be scored', and a different submission order per rater."""
+    make_admin(seeded["user"])
+    client = seeded["client"]
+    sheet = list(
+        csv.DictReader(
+            io.StringIO(
+                client.get(f"/assignments/{seeded['assignment']}/segments.csv?rater=A").content.decode(
+                    "utf-8-sig"
+                )
+            )
+        )
+    )
+    row = sheet[0]
+    assert row["analysis_text"] and row["segment_text"] in row["analysis_text"]
+    expected = {"label_kognitif", "tidak_dapat_dinilai", *(f"indikator_{name}" for name in INDICATORS)}
+    assert expected <= set(row)

@@ -18,11 +18,13 @@ from uuid import UUID
 
 import psycopg
 from psycopg.rows import dict_row
+from psycopg.types.json import Jsonb
 
 from app import db
 from app.agents.graph import evaluate_submission
 from app.agents.models import GraphState
 from app.agents.persist import persist_submission_result
+from app.agents.segments import from_stored, stored
 from app.config import get_settings
 from app.jobs.queue import claim_jobs
 from app.llm.client import ModelUnavailable
@@ -86,6 +88,7 @@ def _load_state(conn, *, owner_id: UUID, run_id: UUID, submission_id: UUID) -> G
         cur.execute(
             """
             select submissions.student_analysis_text, submissions.ai_output_text,
+                   submissions.analysis_segments,
                    runs.prompt_version_ids, runs.mode, runs.model_config,
                    rubric_versions.version as rubric_version,
                    rubric_versions.dimensions, rubric_versions.levels,
@@ -118,6 +121,15 @@ def _load_state(conn, *, owner_id: UUID, run_id: UUID, submission_id: UUID) -> G
         # content, PRD §14); each prompt builder reads its own agent's slice. A missing row stays an
         # empty dict so the builders refuse the run instead of skipping the calibration.
         prompts: dict = {"calibration": json.loads(calibration["template"]) if calibration else {}}
+        # KF-05: score the split that was stored before measurement. A row imported before 0008 has
+        # none, so the same rule is applied once and stored here, before this run's first agent call.
+        text = row["student_analysis_text"] or ""
+        segments = from_stored(row["analysis_segments"], text)
+        if row["analysis_segments"] is None and text.strip():
+            cur.execute(
+                "update submissions set analysis_segments = %s where id = %s",
+                (Jsonb(stored(segments)), submission_id),
+            )
     return GraphState(
         owner_id=str(owner_id),
         run_id=str(run_id),
@@ -132,7 +144,8 @@ def _load_state(conn, *, owner_id: UUID, run_id: UUID, submission_id: UUID) -> G
             **{key: row[key] for key in ("dimensions", "levels", "indicators", "descriptors")},
         },
         prompts=prompts,
-        student_analysis_text=row["student_analysis_text"] or "",
+        student_analysis_text=text,
+        segments=segments,
         ai_output_text=row["ai_output_text"] or "",
     )
 

@@ -319,6 +319,7 @@ def get_results(run_id: uuid.UUID, user: CurrentUser) -> RunResultsOut:
         rows = cur.execute(
             "select s.id as submission_id, s.pseudonym, s.review_flags, "
             "       sc.dimension, sc.indicator, sc.level, sc.rationale, sc.id as score_id, "
+            "       sc.distribution, "
             "       e.quote, e.start_offset, e.end_offset, "
             "       coalesce(f.edited_text, f.generated_text) as feedback_text, "
             "       f.edited_text is not null as feedback_edited, "
@@ -375,6 +376,7 @@ def get_results(run_id: uuid.UUID, user: CurrentUser) -> RunResultsOut:
                 indicator=row["indicator"],
                 level=row["level"],
                 rationale=row["rationale"],
+                distribution=row["distribution"],
                 evidence=[],
                 review=None
                 if row["review_action"] is None

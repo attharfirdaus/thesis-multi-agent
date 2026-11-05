@@ -9,9 +9,10 @@ submission after a correction or an interruption replaces its result instead of 
 `Evidence` cascades from `SystemScore`; `Feedback` is per submission.
 
 Scores are written at two grains (Bab III.6, Bab I.3 luaran 4): one row per segment and label, and the
-text-level rows derived from them — the highest Bloom level over the segments, and for every indicator
-whether any segment shows it. The text-level rows (`segment_index` null) are what the lecturer reviews;
-the segment rows are what the expert raters' labels are compared with.
+text-level rows derived from them — the highest Bloom level over the segments with the spread of segments
+over the level groups, and for every indicator whether any segment shows it. The text-level rows
+(`segment_index` null) are what the lecturer reviews; the segment rows are what the expert raters' labels
+are compared with.
 
 One honest limitation: `Evidence.system_score_id` is not nullable, so a quote is only stored when it
 belongs to a score. Synthesis produces no quote at all — its output *is* the explanation
@@ -19,13 +20,14 @@ belongs to a score. Synthesis produces no quote at all — its output *is* the e
 admits only the two scoring agents.
 """
 
+from typing import Any
 from uuid import UUID
 
 from psycopg.types.json import Jsonb
 from pydantic import BaseModel
 
 from app.agents.models import EvidenceSpan, GraphState, SynthesisResult
-from app.agents.segments import Segment, highest_level
+from app.agents.segments import Segment, distribution, highest_level
 
 NEEDS_REVIEW = "needs_review"
 PRESENT, ABSENT = "present", "absent"
@@ -43,12 +45,13 @@ def _insert_score(
     rationale: str | None,
     segment: Segment | None,
     spans: list[EvidenceSpan],
+    distribution: dict[str, int] | None = None,
 ) -> int:
     """One score row and its evidence. Returns how many evidence rows were written."""
     score_id = cur.execute(
         "insert into system_scores (owner_id, run_id, submission_id, dimension, indicator, level, "
-        "rationale, explanation_type, segment_index, segment_start, segment_end) "
-        "values (%s, %s, %s, %s, %s, %s, %s, 'evidence_span', %s, %s, %s) returning id",
+        "rationale, explanation_type, segment_index, segment_start, segment_end, distribution) "
+        "values (%s, %s, %s, %s, %s, %s, %s, 'evidence_span', %s, %s, %s, %s) returning id",
         (
             owner_id,
             run_id,
@@ -60,6 +63,7 @@ def _insert_score(
             None if segment is None else segment.index,
             None if segment is None else segment.start,
             None if segment is None else segment.end,
+            None if distribution is None else Jsonb(distribution),
         ),
     ).fetchone()[0]
     for span in spans:
@@ -99,7 +103,7 @@ def persist_submission_result(
         ]
 
     counts = {"traces": 0, "scores": 0, "evidence": 0}
-    ids = {"owner_id": owner_id, "run_id": run_id, "submission_id": submission_id}
+    ids: dict[str, Any] = {"owner_id": owner_id, "run_id": run_id, "submission_id": submission_id}
 
     with conn.cursor() as cur:
         # A baseline run produces no feedback (FR-15) and must not touch what a multi-agent run on the
@@ -165,7 +169,8 @@ def persist_submission_result(
                 )
                 counts["scores"] += 1
             # Text level: the highest level any segment reached, explained and evidenced by the segment
-            # that reached it (Bab III.6).
+            # that reached it, with the spread of segments over the rubric's level groups (Bab III.6,
+            # KF-07).
             top = highest_level([e.level for e in cognitive.segments], list(rubric.get("levels") or []))
             deciding = next((e for e in cognitive.segments if e.level == top), None)
             if deciding is not None:
@@ -178,6 +183,10 @@ def persist_submission_result(
                     rationale=f"Tingkat tertinggi, pada segmen {deciding.segment}: {deciding.rationale}",
                     segment=None,
                     spans=spans_for("cognitive", deciding.segment),
+                    distribution=distribution(
+                        [e.level for e in cognitive.segments],
+                        dict((rubric.get("descriptors") or {}).get("groups") or {}),
+                    ),
                 )
                 counts["scores"] += 1
 

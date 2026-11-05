@@ -10,6 +10,7 @@ otherwise reads them as mojibake.
 """
 
 import csv
+import hashlib
 import io
 import uuid
 
@@ -18,7 +19,7 @@ from openpyxl import Workbook
 from psycopg.rows import dict_row
 
 from app import db
-from app.agents.segments import split_segments
+from app.agents.segments import from_stored
 from app.routers.auth import CurrentUser
 from app.schemas import UserOut
 
@@ -48,6 +49,8 @@ COLUMNS = [
     "rubric_version",
     "started_at",
     "finished_at",
+    # Appended (2026-11-05): KF-07's level spread on the text-level cognitive row.
+    "level_distribution",
 ]
 
 # One row per score per span, with the lecturer's newest review and the feedback the export must
@@ -56,7 +59,7 @@ COLUMNS = [
 _EXPORT_SQL = """
 select a.title as assignment_title,
        s.pseudonym,
-       sc.dimension, sc.indicator, sc.level, sc.rationale,
+       sc.dimension, sc.indicator, sc.level, sc.rationale, sc.distribution,
        e.quote as evidence_quote, e.start_offset, e.end_offset,
        lr.action as review_action, lr.new_level as review_new_level,
        lr.reason as review_reason, lr.reviewed_at,
@@ -82,6 +85,11 @@ order by s.pseudonym, sc.dimension, sc.indicator, e.start_offset
 
 def _stamp(value) -> str | None:
     return None if value is None else value.isoformat()
+
+
+def _spread(value: dict | None) -> str | None:
+    """`{"rendah": 3, "menengah": 2}` as one cell: `rendah=3; menengah=2`."""
+    return None if not value else "; ".join(f"{name}={count}" for name, count in value.items())
 
 
 def _cells(row: dict) -> list:
@@ -110,6 +118,7 @@ def _cells(row: dict) -> list:
         row["rubric_version"],
         _stamp(row["started_at"]),
         _stamp(row["finished_at"]),
+        _spread(row["distribution"]),
     ]
 
 
@@ -213,6 +222,7 @@ RESEARCH_COLUMNS = [
     "final_evaluation",
     "model_unavailable",
     "lecturer_comments",
+    "level_distribution",
 ]
 
 _RESEARCH_SQL = """
@@ -221,7 +231,7 @@ select a.title as assignment_title,
        s.pseudonym as submission_pseudonym,
        r.id as run_id, r.mode, r.status as run_status, r.model_config, r.started_at, r.finished_at,
        rv.version as rubric_version,
-       sc.dimension, sc.indicator, sc.level as system_level, sc.rationale,
+       sc.dimension, sc.indicator, sc.level as system_level, sc.rationale, sc.distribution,
        e.quote as evidence_quote, e.start_offset, e.end_offset,
        lr.action as review_action, lr.new_level as review_new_level, lr.reason as review_reason,
        lr.reviewed_at,
@@ -306,6 +316,7 @@ def _research_cells(row: dict) -> list:
         row["final_evaluation"],
         row["model_unavailable"],
         row["lecturer_comments"],
+        _spread(row["distribution"]),
     ]
 
 
@@ -334,9 +345,11 @@ def research_export_xlsx(assignment_id: uuid.UUID, user: CurrentUser) -> Respons
 
 # --------------------------------------------------------------------------- rater sheet (Bab III.6-7)
 
-#: The segments the expert raters label. Built from the same deterministic split the pipeline scores,
-#: and available before any run exists, because the raters finish labelling before the system runs
-#: (Bab III.9). Joined back to the research export on (submission_pseudonym, segment_index).
+#: The segments the expert raters label: the split stored on each submission before any run (KF-05), with
+#: the whole analysis and the AI output as context (Bab III.7), then empty columns for the rater's labels —
+#: one Bloom level, each indicator present or not, and whether the segment cannot be scored at all (a
+#: verbatim quote of the AI output, say), which is excluded from agreement and counted. Joined back to the
+#: research export on (submission_pseudonym, segment_index).
 SEGMENT_COLUMNS = [
     "submission_pseudonym",
     "exclusion_reason",
@@ -345,22 +358,42 @@ SEGMENT_COLUMNS = [
     "segment_end",
     "segment_text",
     "ai_output_text",
+    "analysis_text",
 ]
 
 
-def _segment_rows(assignment_id: uuid.UUID, user: UserOut) -> list[list]:
+def _segment_rows(
+    assignment_id: uuid.UUID, user: UserOut, rater: str | None
+) -> tuple[list[str], list[list]]:
     if user.role != "admin":
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin only.")
     with db.tenant_tx(user.id) as conn, conn.cursor(row_factory=dict_row) as cur:
-        if cur.execute("select id from assignments where id = %s", (assignment_id,)).fetchone() is None:
+        assignment = cur.execute(
+            "select rv.indicators from assignments a "
+            "left join rubric_versions rv on rv.id = a.rubric_version_id where a.id = %s",
+            (assignment_id,),
+        ).fetchone()
+        if assignment is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Assignment not found.")
         submissions = cur.execute(
-            "select pseudonym, exclusion_reason, coalesce(ai_output_text, '') as ai_output_text, "
+            "select pseudonym, exclusion_reason, analysis_segments, "
+            "coalesce(ai_output_text, '') as ai_output_text, "
             "coalesce(student_analysis_text, '') as student_analysis_text "
             "from submissions where assignment_id = %s order by pseudonym",
             (assignment_id,),
         ).fetchall()
-    return [
+    if rater:
+        # Bab III.7: each rater receives the submissions in a different order, so fatigue does not fall on
+        # the same submissions for both. Deterministic per rater name, so a re-download keeps the order.
+        submissions.sort(key=lambda row: hashlib.sha256(f"{rater}:{row['pseudonym']}".encode()).digest())
+    indicators = list(assignment["indicators"] or [])
+    rater_columns = [
+        "label_kognitif",
+        *(f"indikator_{name}" for name in indicators),
+        "tidak_dapat_dinilai",
+        "catatan_penilai",
+    ]
+    rows = [
         [
             row["pseudonym"],
             row["exclusion_reason"],
@@ -369,25 +402,25 @@ def _segment_rows(assignment_id: uuid.UUID, user: UserOut) -> list[list]:
             seg.end,
             seg.text,
             row["ai_output_text"],
+            row["student_analysis_text"],
+            *([None] * len(rater_columns)),
         ]
         for row in submissions
-        for seg in split_segments(row["student_analysis_text"])
+        for seg in from_stored(row["analysis_segments"], row["student_analysis_text"])
     ]
+    return [*SEGMENT_COLUMNS, *rater_columns], rows
 
 
 @router.get("/assignments/{assignment_id}/segments.csv")
-def segments_csv(assignment_id: uuid.UUID, user: CurrentUser) -> Response:
-    """The rater sheet's units, one row per segment."""
-    return _csv_response(
-        SEGMENT_COLUMNS, _segment_rows(assignment_id, user), f"assignment-{assignment_id}-segments.csv"
-    )
+def segments_csv(assignment_id: uuid.UUID, user: CurrentUser, rater: str | None = None) -> Response:
+    """The rater sheet's units, one row per segment. `rater` names the rater, to shuffle the order."""
+    columns, rows = _segment_rows(assignment_id, user, rater)
+    return _csv_response(columns, rows, f"assignment-{assignment_id}-segments.csv")
 
 
 @router.get("/assignments/{assignment_id}/segments.xlsx")
-def segments_xlsx(assignment_id: uuid.UUID, user: CurrentUser) -> Response:
+def segments_xlsx(assignment_id: uuid.UUID, user: CurrentUser, rater: str | None = None) -> Response:
+    columns, rows = _segment_rows(assignment_id, user, rater)
     return _xlsx_response(
-        SEGMENT_COLUMNS,
-        _segment_rows(assignment_id, user),
-        f"assignment-{assignment_id}-segments.xlsx",
-        sheet_title="Segments",
+        columns, rows, f"assignment-{assignment_id}-segments.xlsx", sheet_title="Segments"
     )

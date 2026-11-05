@@ -1,50 +1,56 @@
 {
-  "_comment": "Kalibrasi few-shot milik Atthar (PRD §14), dijawab 2026-10-15. Disimpan sebagai data dan di-seed ke PromptVersion oleh scripts/seed_rubric.py --calibration. Nama field JSON diselaraskan dengan skema agen (evidence_quote, present, indicator) supaya contoh yang dilihat model sama dengan yang divalidasi pipeline; teks penilaian tidak diubah. 2026-11-03: atas instruksi Atthar, contoh metakognitif dilabel ulang dari kode G1 ke empat indikator tesis (orientasi, perencanaan, pemantauan, evaluasi) tanpa kekuatan, dan instruksi kedua agen disesuaikan ke masukan berpasangan per segmen. Label ulang ini sementara: Bab III.8 menyerahkan contoh metakognitif ke penilai ahli tanpa label, dan label mereka menggantikan label ini.",
+  "_comment": "Kalibrasi few-shot milik Atthar (PRD §14), dijawab 2026-10-15. Disimpan sebagai data dan di-seed ke PromptVersion oleh scripts/seed_rubric.py --calibration. Nama field JSON diselaraskan dengan skema agen (evidence_quote, present, indicator) supaya contoh yang dilihat model sama dengan yang divalidasi pipeline; teks penilaian tidak diubah. 2026-11-03: atas instruksi Atthar, contoh metakognitif dilabel ulang dari kode G1 ke empat indikator tesis (orientasi, perencanaan, pemantauan, evaluasi) tanpa kekuatan, dan instruksi kedua agen disesuaikan ke masukan berpasangan per segmen. Label ulang ini sementara: Bab III.8 menyerahkan contoh metakognitif ke penilai ahli tanpa label, dan label mereka menggantikan label ini. 2026-11-05: contoh kognitif dibentuk ulang menjadi satu segmen per contoh beserta potongan konteksnya (Bab III.2.3, Tabel III.5): `segmen` adalah kalimat (menurut aturan segmentasi sistem) yang memuat evidence_quote, `konteks_analisis` adalah teks analisis aslinya; level, kutipan, dan alasan tidak diubah. Definisi indikator metakognitif pada instruksi diselaraskan dengan Gambar II.2 dan Subbab II.4.3.",
   "interim": true,
   "pending_atthar": false,
   "source": "Atthar, 2026-10-15 (menjawab PRD §14)",
   "cognitive": {
-    "instructions": "Anda menilai level kognitif tulisan mahasiswa berdasarkan Taksonomi Bloom revisi (Anderson & Krathwohl, 2001). Mahasiswa diberi tugas menganalisis output AI. Nilai HANYA teks analisis mahasiswa (<teks_mahasiswa>), segmen per segmen. Output AI (<keluaran_ai>) adalah objek analisis: jangan menilai kualitasnya dan jangan menjadikannya acuan kebenaran.\n\nLevel yang tersedia: C1 Remember, C2 Understand, C3 Apply, C4 Analyze, C5 Evaluate, C6 Create.\n\nPrinsip penilaian:\n- Untuk setiap segmen, tentukan tepat satu level: level TERTINGGI yang dibuktikan oleh kutipan langsung dari segmen itu.\n- Tanpa kutipan pendukung, level tidak boleh diberikan. Turunkan ke level yang bisa dibuktikan.\n- Panjang tulisan bukan indikator level.\n- Jika mahasiswa hanya mengulang isi output AI dengan kata berbeda, itu C2, bukan C4, meskipun terdengar analitis.\n\nKeluarkan JSON sesuai schema. Jangan menulis apa pun di luar JSON.",
+    "instructions": "Anda menilai level kognitif tulisan mahasiswa berdasarkan Taksonomi Bloom revisi (Anderson & Krathwohl, 2001). Mahasiswa diberi tugas menganalisis output AI. Nilai HANYA teks analisis mahasiswa (<teks_mahasiswa>), segmen per segmen. Output AI (<keluaran_ai>) adalah objek analisis: jangan menilai kualitasnya dan jangan menjadikannya acuan kebenaran.\n\nLevel yang tersedia: C1 Remember, C2 Understand, C3 Apply, C4 Analyze, C5 Evaluate, C6 Create.\n\nPrinsip penilaian:\n- Untuk setiap segmen, tentukan tepat satu level: level TERTINGGI yang dibuktikan oleh kutipan langsung dari segmen itu.\n- Setiap contoh di bawah melabeli satu segmen (`segmen`); `konteks_keluaran_ai` dan `konteks_analisis` hanya konteks yang dibaca, bukan yang dilabeli.\n- Tanpa kutipan pendukung, level tidak boleh diberikan. Turunkan ke level yang bisa dibuktikan.\n- Panjang tulisan bukan indikator level.\n- Jika mahasiswa hanya mengulang isi output AI dengan kata berbeda, itu C2, bukan C4, meskipun terdengar analitis.\n\nKeluarkan JSON sesuai schema. Jangan menulis apa pun di luar JSON.",
     "examples": [
       {
-        "output_ai": "Normalisasi database terdiri dari 1NF, 2NF, dan 3NF. 1NF menghilangkan grup berulang, 2NF menghilangkan ketergantungan parsial, 3NF menghilangkan ketergantungan transitif.",
-        "analisis_mhs": "Jadi normalisasi ada tiga bentuk. 1NF untuk grup berulang, 2NF untuk ketergantungan parsial, 3NF untuk ketergantungan transitif. Penjelasan AI sudah lengkap.",
+        "konteks_keluaran_ai": "Normalisasi database terdiri dari 1NF, 2NF, dan 3NF. 1NF menghilangkan grup berulang, 2NF menghilangkan ketergantungan parsial, 3NF menghilangkan ketergantungan transitif.",
+        "konteks_analisis": "Jadi normalisasi ada tiga bentuk. 1NF untuk grup berulang, 2NF untuk ketergantungan parsial, 3NF untuk ketergantungan transitif. Penjelasan AI sudah lengkap.",
+        "segmen": "1NF untuk grup berulang, 2NF untuk ketergantungan parsial, 3NF untuk ketergantungan transitif.",
         "level": "C1",
         "evidence_quote": "1NF untuk grup berulang, 2NF untuk ketergantungan parsial",
         "rationale": "Mahasiswa menyalin ulang isi output AI tanpa mengubah struktur atau menambah pemahaman. Tidak ada pemrosesan di luar pengulangan."
       },
       {
-        "output_ai": "(sama seperti Contoh 1)",
-        "analisis_mhs": "Intinya normalisasi itu proses bertahap memecah tabel supaya tidak ada data yang tersimpan berulang. Ketergantungan parsial maksudnya kolom yang cuma bergantung ke sebagian primary key, bukan ke seluruhnya. Jadi tiap tahap menyelesaikan satu jenis masalah redundansi.",
+        "konteks_keluaran_ai": "(sama seperti Contoh 1)",
+        "konteks_analisis": "Intinya normalisasi itu proses bertahap memecah tabel supaya tidak ada data yang tersimpan berulang. Ketergantungan parsial maksudnya kolom yang cuma bergantung ke sebagian primary key, bukan ke seluruhnya. Jadi tiap tahap menyelesaikan satu jenis masalah redundansi.",
+        "segmen": "Ketergantungan parsial maksudnya kolom yang cuma bergantung ke sebagian primary key, bukan ke seluruhnya.",
         "level": "C2",
         "evidence_quote": "Ketergantungan parsial maksudnya kolom yang cuma bergantung ke sebagian primary key",
         "rationale": "Mahasiswa merumuskan ulang konsep dengan bahasa sendiri dan menjelaskan makna istilah, tetapi belum menerapkan atau membongkar klaim AI."
       },
       {
-        "output_ai": "(sama seperti Contoh 1)",
-        "analisis_mhs": "Saya coba terapkan ke tabel transaksi di tugas sebelumnya. Tabel itu punya kolom id_transaksi, id_produk, nama_produk, dan jumlah. Karena nama_produk hanya bergantung pada id_produk padahal primary key-nya gabungan id_transaksi dan id_produk, tabel itu belum 2NF. Maka saya pecah jadi tabel produk terpisah.",
+        "konteks_keluaran_ai": "(sama seperti Contoh 1)",
+        "konteks_analisis": "Saya coba terapkan ke tabel transaksi di tugas sebelumnya. Tabel itu punya kolom id_transaksi, id_produk, nama_produk, dan jumlah. Karena nama_produk hanya bergantung pada id_produk padahal primary key-nya gabungan id_transaksi dan id_produk, tabel itu belum 2NF. Maka saya pecah jadi tabel produk terpisah.",
+        "segmen": "Karena nama_produk hanya bergantung pada id_produk padahal primary key-nya gabungan id_transaksi dan id_produk, tabel itu belum 2NF.",
         "level": "C3",
         "evidence_quote": "Karena nama_produk hanya bergantung pada id_produk padahal primary key-nya gabungan",
         "rationale": "Mahasiswa menggunakan aturan dari output AI pada kasus konkret miliknya sendiri dan menghasilkan keputusan desain. Penerapan, bukan sekadar pemahaman."
       },
       {
-        "output_ai": "(sama seperti Contoh 1)",
-        "analisis_mhs": "Penjelasan AI menyusun ketiga bentuk seolah berurutan dan setara bobotnya, padahal lompatan dari 1NF ke 2NF menyangkut struktur primary key sedangkan 2NF ke 3NF menyangkut relasi antar atribut non-kunci. Dua hal itu beda jenis masalah. AI juga diam soal asumsi bahwa primary key sudah ditentukan dengan benar sejak awal, padahal justru di situ sumber kesalahan normalisasi paling sering muncul.",
+        "konteks_keluaran_ai": "(sama seperti Contoh 1)",
+        "konteks_analisis": "Penjelasan AI menyusun ketiga bentuk seolah berurutan dan setara bobotnya, padahal lompatan dari 1NF ke 2NF menyangkut struktur primary key sedangkan 2NF ke 3NF menyangkut relasi antar atribut non-kunci. Dua hal itu beda jenis masalah. AI juga diam soal asumsi bahwa primary key sudah ditentukan dengan benar sejak awal, padahal justru di situ sumber kesalahan normalisasi paling sering muncul.",
+        "segmen": "AI juga diam soal asumsi bahwa primary key sudah ditentukan dengan benar sejak awal, padahal justru di situ sumber kesalahan normalisasi paling sering muncul.",
         "level": "C4",
         "evidence_quote": "AI juga diam soal asumsi bahwa primary key sudah ditentukan dengan benar sejak awal",
         "rationale": "Mahasiswa membongkar struktur argumen AI, membedakan jenis masalah antar tahap, dan mengidentifikasi asumsi yang tidak dinyatakan. Pembedahan komponen dan relasi, bukan penilaian benar-salah."
       },
       {
-        "output_ai": "(sama seperti Contoh 1)",
-        "analisis_mhs": "Saya cek klaim AI ini ke Elmasri & Navathe dan ternyata tidak salah tapi tidak memadai untuk konteks tugas kita. Untuk sistem OLTP seperti studi kasus kita, berhenti di 3NF memang wajar. Tapi AI menyajikannya sebagai aturan umum tanpa syarat, padahal pada skema pelaporan yang read-heavy, normalisasi sampai 3NF justru menambah biaya join dan praktik yang lazim adalah denormalisasi terkendali. Jadi rekomendasi AI ini hanya valid kalau beban kerjanya transaksional, dan itu tidak pernah dia sebut.",
+        "konteks_keluaran_ai": "(sama seperti Contoh 1)",
+        "konteks_analisis": "Saya cek klaim AI ini ke Elmasri & Navathe dan ternyata tidak salah tapi tidak memadai untuk konteks tugas kita. Untuk sistem OLTP seperti studi kasus kita, berhenti di 3NF memang wajar. Tapi AI menyajikannya sebagai aturan umum tanpa syarat, padahal pada skema pelaporan yang read-heavy, normalisasi sampai 3NF justru menambah biaya join dan praktik yang lazim adalah denormalisasi terkendali. Jadi rekomendasi AI ini hanya valid kalau beban kerjanya transaksional, dan itu tidak pernah dia sebut.",
+        "segmen": "Jadi rekomendasi AI ini hanya valid kalau beban kerjanya transaksional, dan itu tidak pernah dia sebut.",
         "level": "C5",
         "evidence_quote": "rekomendasi AI ini hanya valid kalau beban kerjanya transaksional, dan itu tidak pernah dia sebut",
         "rationale": "Mahasiswa menguji klaim AI terhadap sumber eksternal dan terhadap kriteria konteks penggunaan, lalu memutuskan batas keberlakuannya. Ada judgment berdasarkan kriteria.",
         "catatan_sumber": "SYNTHETIC — tidak ada contoh nyata di arsip untuk level ini"
       },
       {
-        "output_ai": "(sama seperti Contoh 1)",
-        "analisis_mhs": "Dari keterbatasan yang saya temukan, saya susun alur keputusan sendiri untuk tim kami: mulai dari klasifikasi beban kerja (transaksional atau analitik), lalu ambang frekuensi join, baru tentukan target bentuk normal per tabel, bukan per database. Untuk tabel referensi yang jarang berubah saya tetapkan 3NF, untuk tabel agregat pelaporan saya izinkan 2NF dengan catatan refresh terjadwal. Alur ini saya turunkan jadi checklist empat pertanyaan yang bisa dipakai anggota tim lain tanpa harus paham teori normalisasi penuh.",
+        "konteks_keluaran_ai": "(sama seperti Contoh 1)",
+        "konteks_analisis": "Dari keterbatasan yang saya temukan, saya susun alur keputusan sendiri untuk tim kami: mulai dari klasifikasi beban kerja (transaksional atau analitik), lalu ambang frekuensi join, baru tentukan target bentuk normal per tabel, bukan per database. Untuk tabel referensi yang jarang berubah saya tetapkan 3NF, untuk tabel agregat pelaporan saya izinkan 2NF dengan catatan refresh terjadwal. Alur ini saya turunkan jadi checklist empat pertanyaan yang bisa dipakai anggota tim lain tanpa harus paham teori normalisasi penuh.",
+        "segmen": "Dari keterbatasan yang saya temukan, saya susun alur keputusan sendiri untuk tim kami: mulai dari klasifikasi beban kerja (transaksional atau analitik), lalu ambang frekuensi join, baru tentukan target bentuk normal per tabel, bukan per database.",
         "level": "C6",
         "evidence_quote": "saya susun alur keputusan sendiri untuk tim kami",
         "rationale": "Mahasiswa menghasilkan artefak baru — kerangka keputusan dan checklist — yang tidak ada di output AI maupun di materi, disusun dari hasil evaluasinya sendiri.",
@@ -53,7 +59,7 @@
     ]
   },
   "metacognitive": {
-    "instructions": "Anda mendeteksi indikator metakognitif dalam teks analisis mahasiswa terhadap output AI, per segmen, menggunakan empat indikator regulasi metakognitif (Bab II.2.4): orientasi (memahami tuntutan dan tujuan tugas), perencanaan (memilih strategi atau urutan langkah), pemantauan (memeriksa pemahaman atau kemajuan selama mengerjakan), evaluasi (menilai hasil atau strategi berpikirnya sendiri).\n\nPrinsip:\n- Indikator bersifat nominal: satu segmen dapat memuat nol, satu, atau lebih dari satu indikator.\n- Setiap indikator yang ada wajib disertai kutipan langsung dari segmen tersebut.\n- Indikator ini tentang PROSES BERPIKIR mahasiswa atas pekerjaannya sendiri, bukan kualitas isi analisisnya. Menilai benar-salahnya output AI bukan evaluasi metakognitif.\n- Ekspresi afektif (\"saya bingung\", \"ini menarik\") bukan indikator. Hanya hitung jika disertai tindakan atau refleksi terhadap proses.\n\nKeluarkan JSON sesuai schema. Jangan menulis apa pun di luar JSON.",
+    "instructions": "Anda mendeteksi indikator metakognitif dalam teks analisis mahasiswa terhadap output AI, per segmen, menggunakan empat indikator regulasi metakognitif (Bab II.2.4, Gambar II.2, II.4.3): orientasi (merujuk persyaratan tugas dan standar penilaian), perencanaan (menentukan tujuan dan strategi pengerjaan, misalnya langkah yang akan dilakukan untuk menguji output AI), pemantauan (memeriksa pemahaman dan ketidaksesuaian informasi, misalnya keraguan, ketidakpastian, atau ketidaksesuaian antara output AI dan sumber lain), evaluasi (menilai kesimpulan dan efektivitas strategi sendiri).\n\nPrinsip:\n- Indikator bersifat nominal: satu segmen dapat memuat nol, satu, atau lebih dari satu indikator.\n- Setiap indikator yang ada wajib disertai kutipan langsung dari segmen tersebut.\n- Indikator ini tentang PROSES BERPIKIR mahasiswa atas pekerjaannya sendiri, bukan kualitas isi analisisnya. Menilai benar-salahnya output AI bukan evaluasi metakognitif.\n- Ekspresi afektif (\"saya bingung\", \"ini menarik\") bukan indikator. Hanya hitung jika disertai tindakan atau refleksi terhadap proses.\n\nKeluarkan JSON sesuai schema. Jangan menulis apa pun di luar JSON.",
     "examples": [
       {
         "segmen": "Sebelum membaca jawaban AI, saya tentukan dulu apa yang sebenarnya ditanyakan tugas ini: bukan definisi normalisasi, tapi kapan normalisasi layak dihentikan. Jadi saya baca output AI dengan pertanyaan itu di kepala.",

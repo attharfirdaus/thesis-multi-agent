@@ -14,11 +14,12 @@ Connects as the runtime role from DATABASE_URL — the role the app runs as — 
 under the FORCEd tenant policies of migration 0001. The owner is looked up by email, or is the first
 admin when --email is omitted.
 
-What is seeded is deliberately contentless: the six canonical Bloom level names, and exactly the four
-metacognitive indicators of the thesis (Bab II.2.4, III.2.2): orientasi, perencanaan, pemantauan,
-evaluasi. They replaced the interim G1 SRL codes on 2026-11-03. No descriptor, no threshold and no
-per-indicator description is written, because the supervisors' rater guideline replaces all of it
-(PRD §13) — the flags and the note in `descriptors` say so. The calibration examples are Atthar's
+What is seeded is the thesis's own wording and nothing more: the six Bloom levels with their names and
+the definitions of Gambar II.1, the three level groups of Bab III.6 (after Xu Li dkk., 2026), and exactly
+the four metacognitive indicators of Bab II.2.4 / III.2.2 (orientasi, perencanaan, pemantauan, evaluasi)
+with the definitions of Gambar II.2 and II.4.3. The prompt copies these descriptors (Tabel III.5,
+"Rubrik"). No threshold is written; the rubric stays interim until it is finalised before the raters
+label (Bab III.2.2) — the flags and the note in `descriptors` say so. The calibration examples are Atthar's
 contribution (PRD §14): pass them as a JSON list with --calibration, or the row is written empty and
 pending, and the cognitive and metacognitive agents then refuse to run (PRD §6).
 """
@@ -49,13 +50,37 @@ LEVEL_NAMES = {
     "C5": "Evaluate",
     "C6": "Create",
 }
+#: Each level's definition, verbatim from Gambar II.1 (spelling of "Mengidentifikasi" corrected).
+LEVEL_DEFINITIONS = {
+    "C1": "Mengingat informasi spesifik",
+    "C2": "Memahami maksud materi pembelajaran",
+    "C3": "Menggunakan informasi pada situasi yang berbeda yang mirip",
+    "C4": "Mengidentifikasi hubungan pada informasi yang diuraikan",
+    "C5": "Menganalisis informasi dan membuat penilaian",
+    "C6": "Menggunakan informasi untuk membuat sesuatu yang baru",
+}
+#: The three level groups of Bab II.4.2 and III.6, as Xu Li dkk. (2026, Table 2) assign them: Remember and
+#: Understand lower order, Apply and Analyze medium order, Evaluate and Create higher order.
+LEVEL_GROUPS = {"rendah": ["C1", "C2"], "menengah": ["C3", "C4"], "tinggi": ["C5", "C6"]}
 INDICATORS = ["orientasi", "perencanaan", "pemantauan", "evaluasi"]
+#: Each indicator's definition from Gambar II.2, then how it shows in an analysis of AI output (II.4.3).
+INDICATOR_DEFINITIONS = {
+    "orientasi": "Merujuk persyaratan tugas dan standar penilaian. Dalam teks: mahasiswa merujuk pada "
+    "persyaratan tugas atau standar penilaian.",
+    "perencanaan": "Menentukan tujuan dan strategi pengerjaan. Dalam teks: mahasiswa menyatakan langkah "
+    "yang akan dilakukan untuk menguji output AI.",
+    "pemantauan": "Memeriksa pemahaman dan ketidaksesuaian informasi. Dalam teks: mahasiswa menunjukkan "
+    "keraguan, ketidakpastian, atau ketidaksesuaian antara output AI dan sumber lain.",
+    "evaluasi": "Menilai kesimpulan dan efektivitas strategi. Dalam teks: mahasiswa menilai kesimpulannya "
+    "sendiri.",
+}
 DIMENSIONS = ["cognitive", "metacognitive"]
 
 RUBRIC_NOTE = (
     "Rubrik interim: empat indikator regulasi metakognitif (orientasi, perencanaan, pemantauan, "
     "evaluasi; Bab II.2.4) untuk dimensi metakognitif, bersifat nominal, dan enam kode level Bloom "
-    "revisi (Anderson & Krathwohl, 2001) beserta namanya untuk dimensi kognitif. Rubrik akhir "
+    "revisi (Anderson & Krathwohl, 2001) beserta nama, definisi (Gambar II.1) dan tiga kelompok "
+    "tingkatnya (Xu Li dkk., 2026) untuk dimensi kognitif. Rubrik akhir "
     "ditetapkan sebelum pelabelan penilai ahli (Bab III.2.2). Tidak ada ambang batas yang ditulis di sini."
 )
 CALIBRATION_NOTE = (
@@ -85,7 +110,9 @@ def rubric_content() -> dict[str, Any]:
         "indicators": INDICATORS,
         "descriptors": {
             "levels": LEVEL_NAMES,
-            "indicators": {},
+            "level_definitions": LEVEL_DEFINITIONS,
+            "groups": LEVEL_GROUPS,
+            "indicators": INDICATOR_DEFINITIONS,
             "interim": True,
             "pending_supervisors": True,
             "note": RUBRIC_NOTE,

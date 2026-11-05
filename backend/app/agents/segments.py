@@ -7,8 +7,11 @@ units, so the split is deterministic — the same stored text always yields the 
 segment offsets are stored with every per-segment score.
 
 Text-level scores are derived from the segment labels, never asked of a model separately: the highest
-Bloom level over the segments for the cognitive dimension, and the set of indicators found in any
-segment for the metacognitive one.
+Bloom level over the segments and the spread of segments over the three level groups for the cognitive
+dimension, and the set of indicators found in any segment for the metacognitive one.
+
+The split is stored on the submission when the analysis is set (KF-05), so it is fixed before the raters
+or any run see it; `split_segments` is only re-applied to rows imported before that column existed.
 """
 
 import re
@@ -76,3 +79,19 @@ def highest_level(levels: list[str], rubric_levels: list[str]) -> str | None:
     """The highest of `levels` in the rubric's own order (C1 < … < C6), or None when there is none."""
     ranked = [level for level in levels if level in rubric_levels]
     return max(ranked, key=rubric_levels.index) if ranked else None
+
+
+def stored(segments: list[Segment]) -> list[dict]:
+    """The form `submissions.analysis_segments` keeps (KF-05): the split, fixed before measurement."""
+    return [segment.model_dump() for segment in segments]
+
+
+def from_stored(value: list[dict] | None, text: str) -> list[Segment]:
+    """The stored split, or — for a row imported before it was stored — the same rule applied now."""
+    return [Segment(**item) for item in value] if value else split_segments(text)
+
+
+def distribution(levels: list[str], groups: dict[str, list[str]]) -> dict[str, int]:
+    """How many segments fall in each level group (Bab III.6: lower / medium / higher order, after Xu Li
+    dkk., 2026). The groups are rubric data, so a rubric without them yields an empty distribution."""
+    return {name: sum(level in members for level in levels) for name, members in groups.items()}

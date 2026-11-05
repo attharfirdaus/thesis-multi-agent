@@ -335,6 +335,7 @@ EXPECTED_HEADER = [
     "rubric_version",
     "started_at",
     "finished_at",
+    "level_distribution",
 ]
 
 

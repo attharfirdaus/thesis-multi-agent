@@ -230,7 +230,15 @@ def seeded(client, monkeypatch):
                 json.dumps({"cognitive": "Bloom", "metacognitive": "Indikator metakognitif"}),
                 json.dumps(LEVELS),
                 json.dumps(INDICATORS),
-                json.dumps({"levels": LEVEL_NAMES, "indicators": {}, "interim": True}),
+                json.dumps(
+                    {
+                        "levels": LEVEL_NAMES,
+                        "indicators": {},
+                        # The three level groups (Bab III.6), as scripts/seed_rubric.py writes them.
+                        "groups": {"rendah": ["C1", "C2"], "menengah": ["C3", "C4"], "tinggi": ["C5", "C6"]},
+                        "interim": True,
+                    }
+                ),
             ),
         ).fetchone()[0]
         for agent in ("cognitive", "metacognitive", "synthesis"):

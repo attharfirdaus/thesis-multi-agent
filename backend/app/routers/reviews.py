@@ -82,7 +82,7 @@ def get_submission(submission_id: uuid.UUID, user: CurrentUser) -> SubmissionDet
             by_id: dict[uuid.UUID, SubmissionScoreOut] = {}
             by_segment_id: dict[uuid.UUID, SegmentScoreOut] = {}
             for row in cur.execute(
-                "select sc.id, sc.dimension, sc.indicator, sc.level, sc.rationale, "
+                "select sc.id, sc.dimension, sc.indicator, sc.level, sc.rationale, sc.distribution, "
                 "       sc.segment_index, sc.segment_start, sc.segment_end, "
                 "       e.quote, e.start_offset, e.end_offset "
                 "from system_scores sc left join evidence e on e.system_score_id = sc.id "
@@ -102,6 +102,7 @@ def get_submission(submission_id: uuid.UUID, user: CurrentUser) -> SubmissionDet
                             indicator=row["indicator"],
                             level=row["level"],
                             rationale=row["rationale"],
+                            distribution=row["distribution"],
                         )
                         by_id[row["id"]] = score
                         scores.append(score)
@@ -129,12 +130,14 @@ def get_submission(submission_id: uuid.UUID, user: CurrentUser) -> SubmissionDet
                         )
                     )
 
+            # Text-level scores and segment labels alike carry the lecturer's comments and reviews (KF-09).
+            commentable: dict[uuid.UUID, SubmissionScoreOut | SegmentScoreOut] = {**by_id, **by_segment_id}
             for row in cur.execute(
                 "select id, system_score_id, body, created_at from score_comments "
                 "where system_score_id = any(%s) order by created_at",
-                (list(by_id),),
+                (list(commentable),),
             ).fetchall():
-                by_id[row["system_score_id"]].comments.append(CommentOut(**row))
+                commentable[row["system_score_id"]].comments.append(CommentOut(**row))
 
             # The newest review per score. A lecturer who changes their mind records a second row —
             # FR-11 keeps the history — and only the latest one is the state of the score now.
@@ -143,7 +146,7 @@ def get_submission(submission_id: uuid.UUID, user: CurrentUser) -> SubmissionDet
                 "       system_score_id, action, new_level, reason, reviewed_at "
                 "from lecturer_reviews where system_score_id = any(%s) "
                 "order by system_score_id, reviewed_at desc",
-                (list(by_id),),
+                (list(commentable),),
             ).fetchall():
                 reviews.append(ReviewOut(**row))
 

@@ -160,6 +160,8 @@ export type Score = {
   rationale: string | null;
   evidence: Evidence[];
   comments?: Comment[];
+  /** KF-07: segments per level group, on the text-level cognitive score only. */
+  distribution?: Record<string, number> | null;
 };
 
 /** One segment's label (Bab III.6): the unit behind a text-level score. */
@@ -271,6 +273,8 @@ export type RunResults = {
       evidence: Evidence[];
       /** The newest lecturer review of this score, or null while nobody has judged it. */
       review: Review | null;
+      /** KF-07: segments per level group, on the text-level cognitive score only. */
+      distribution?: Record<string, number> | null;
     }[];
   }[];
 };

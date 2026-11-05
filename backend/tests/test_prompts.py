@@ -63,8 +63,8 @@ CALIBRATION = {
 
 def test_levels_and_indicators_come_from_the_rubric_row():
     system, user = cognitive_prompt(RUBRIC, CALIBRATION, *PAIRED)
-    assert RUBRIC["levels"][4] in user
-    assert "kalibrasi-contoh-alasan" in user
+    assert RUBRIC["levels"][4] in system
+    assert "kalibrasi-contoh-alasan" in system
     assert f"[1] {ANALYSIS}" in user
     # The schema, not a template literal, tells the model what to return.
     assert "evidence_quote" in system
@@ -72,17 +72,17 @@ def test_levels_and_indicators_come_from_the_rubric_row():
 
 def test_a_renamed_level_replaces_the_stored_name():
     rubric = {**RUBRIC, "levels": ["Menimbang-Ulang Bukti"]}
-    _, user = cognitive_prompt(rubric, CALIBRATION, *PAIRED)
-    assert "Menimbang-Ulang Bukti" in user
-    assert "Mengingat" not in user
-    assert "Mencipta" not in user
+    system, _ = cognitive_prompt(rubric, CALIBRATION, *PAIRED)
+    assert "Menimbang-Ulang Bukti" in system
+    assert "Mengingat" not in system
+    assert "Mencipta" not in system
 
 
 def test_indicators_come_from_the_rubric_row():
     rubric = {**RUBRIC, "indicators": ["indikator-uji-a", "indikator-uji-b"]}
-    _, user = metacognitive_prompt(rubric, CALIBRATION, *PAIRED)
-    assert "indikator-uji-a" in user and "indikator-uji-b" in user
-    assert "perencanaan" not in user
+    system, _ = metacognitive_prompt(rubric, CALIBRATION, *PAIRED)
+    assert "indikator-uji-a" in system and "indikator-uji-b" in system
+    assert "perencanaan" not in system
 
 
 @pytest.mark.parametrize("build", [cognitive_prompt, metacognitive_prompt])
@@ -97,8 +97,8 @@ def test_one_agent_without_its_block_refuses_only_that_agent():
     only_cognitive = {"cognitive": CALIBRATION["cognitive"]}
     with pytest.raises(MissingCalibration):
         metacognitive_prompt(RUBRIC, only_cognitive, *PAIRED)
-    _, user = cognitive_prompt(RUBRIC, only_cognitive, *PAIRED)
-    assert "kalibrasi-contoh-alasan" in user
+    system, _ = cognitive_prompt(RUBRIC, only_cognitive, *PAIRED)
+    assert "kalibrasi-contoh-alasan" in system
 
 
 def test_both_specialists_read_the_paired_input_with_role_markers():
@@ -136,9 +136,9 @@ def test_synthesis_retry_carries_the_evidence_failure_reason():
 
 def test_single_agent_prompt_carries_the_full_rubric_and_both_calibration_blocks():
     system, user = single_agent_prompt(RUBRIC, CALIBRATION, *PAIRED)
-    assert RUBRIC["levels"][4] in user
-    assert "perencanaan" in user and "evaluasi" in user
-    assert "kalibrasi-contoh-alasan" in user
+    assert RUBRIC["levels"][4] in system
+    assert "perencanaan" in system and "evaluasi" in system
+    assert "kalibrasi-contoh-alasan" in system
     assert ANALYSIS in user
     # One judgement task: the schema carries both dimensions' segment labels together.
     assert "evidence_quote" in system
@@ -168,8 +168,8 @@ def test_the_shipped_calibration_reaches_both_prompts_without_its_provenance_not
     out of the prompt."""
     calibration = json.loads(CALIBRATION_PATH.read_text(encoding="utf-8"))
 
-    _, cognitive = cognitive_prompt(RUBRIC, calibration, *PAIRED)
-    _, metacognitive = metacognitive_prompt(RUBRIC, calibration, *PAIRED)
+    cognitive, _ = cognitive_prompt(RUBRIC, calibration, *PAIRED)
+    metacognitive, _ = metacognitive_prompt(RUBRIC, calibration, *PAIRED)
 
     assert "saya susun alur keputusan sendiri untuk tim kami" in cognitive
     assert "perencanaan" not in cognitive  # the metacognitive block belongs to the other agent
@@ -193,11 +193,15 @@ def test_seeded_rubric_carries_the_thesis_indicators_and_the_six_bloom_codes():
     content = rubric_content()
     assert content["indicators"] == ["orientasi", "perencanaan", "pemantauan", "evaluasi"]
     assert content["levels"] == ["C1", "C2", "C3", "C4", "C5", "C6"]
-    # The names come from Atthar's calibration (Anderson & Krathwohl). No threshold is seeded: that is
-    # the supervisors' rater guideline's job (PRD §13), and inventing one here would be the mistake.
-    assert content["descriptors"]["levels"]["C4"] == "Analyze"
-    assert content["descriptors"]["indicators"] == {}
-    assert content["descriptors"]["pending_supervisors"] is True
+    # The names come from Atthar's calibration (Anderson & Krathwohl), the definitions from Gambar II.1
+    # and II.2, the groups from Xu Li dkk. (2026). No threshold is seeded.
+    descriptors = content["descriptors"]
+    assert descriptors["levels"]["C4"] == "Analyze"
+    assert descriptors["level_definitions"]["C1"] == "Mengingat informasi spesifik"
+    assert descriptors["indicators"]["pemantauan"].startswith("Memeriksa pemahaman dan ketidaksesuaian")
+    assert set(descriptors["indicators"]) == set(content["indicators"])
+    assert descriptors["groups"] == {"rendah": ["C1", "C2"], "menengah": ["C3", "C4"], "tinggi": ["C5", "C6"]}
+    assert descriptors["pending_supervisors"] is True
     assert "threshold" not in json.dumps(content["descriptors"]).lower()
 
 
@@ -213,3 +217,33 @@ def test_the_shipped_metacognitive_calibration_uses_only_the_thesis_indicators()
             assert finding["evidence_quote"] in example["segmen"]
             used.add(finding["indicator"])
     assert used == set(RUBRIC["indicators"]), "every indicator needs at least one example"
+
+
+def test_specialist_prompt_parts_follow_tabel_iii_5():
+    """Tabel III.5's order: role and task, rubric, paired-input rule, few-shot examples, evidence rule,
+    output schema, and the segment list last. The rubric carries each label's definition."""
+    rubric = {"version": 3, **rubric_content()}
+    for build in (cognitive_prompt, metacognitive_prompt, single_agent_prompt):
+        system, user = build(rubric, CALIBRATION, *PAIRED)
+        markers = ["Your role", "Rubrik versi", "Paired input.", "Contoh kalibrasi", "Evidence rule.",
+                   "Reply with JSON only"]
+        positions = [system.index(marker) for marker in markers]
+        assert positions == sorted(positions), build.__name__
+        assert user.rstrip().endswith("segmen).") and "<teks_mahasiswa>" in user
+    system, _ = cognitive_prompt(rubric, CALIBRATION, *PAIRED)
+    assert "- C1 Remember: Mengingat informasi spesifik" in system
+    system, _ = metacognitive_prompt(rubric, CALIBRATION, *PAIRED)
+    assert "- orientasi: Merujuk persyaratan tugas dan standar penilaian" in system
+
+
+def test_shipped_cognitive_examples_label_one_segment_with_its_context():
+    """Bab III.2.3 / Tabel III.5: one example is one sentence segment with a context snippet, and the
+    segment is a real unit of the system's own split, holding the example's quote."""
+    from app.agents.evidence import locate_quote
+
+    block = json.loads(CALIBRATION_PATH.read_text(encoding="utf-8"))["cognitive"]
+    assert [example["level"] for example in block["examples"]] == ["C1", "C2", "C3", "C4", "C5", "C6"]
+    for example in block["examples"]:
+        units = [segment.text for segment in split_segments(example["konteks_analisis"])]
+        assert example["segmen"] in units
+        assert locate_quote(example["segmen"], example["evidence_quote"]) is not None
