@@ -20,7 +20,7 @@ Atthar asked for every code/thesis mismatch to be fixed. Code, migration `0007_t
 7. **Score comments (KF-08)** in `score_comments`, apart from reviews. **Model unavailable (KNF-04):** a run whose snapshotted model differs from the configured one, or that the provider reports gone, is flagged `model_unavailable` and its jobs fail without retry.
 8. Fixed in passing: a run snapshotted *every* prompt version ever seeded, so the worker picked the calibration row arbitrarily once a second version existed; now only the newest per agent.
 
-Not done: confidence and token counts (not in the thesis); migration 0007 and the reseed are not applied to Neon.
+Not done: confidence and token counts (not in the thesis). Migration 0007 and the reseed were already on Neon (applied 2026-11-03 11:36 UTC: rubric v2 with orientasi/perencanaan/pemantauan/evaluasi, prompts v2, single_agent v1). Verified 2026-11-05 after a backup (`~/thesis_pre0007.dump`): `scripts.migrate` applied nothing, and a read-only dry run of `seed_rubric` found nothing to insert.
 
 ## 2026-10-18 — PRD aligned to Bab III (15 changes, `PRD.md` only)
 
