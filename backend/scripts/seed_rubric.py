@@ -15,7 +15,8 @@ under the FORCEd tenant policies of migration 0001. The owner is looked up by em
 admin when --email is omitted.
 
 What is seeded is deliberately contentless: the six canonical Bloom level names, and exactly the four
-G1 SRL codes (elaborasi, organisasi, orientasi, evaluasi). No descriptor, no threshold and no
+metacognitive indicators of the thesis (Bab II.2.4, III.2.2): orientasi, perencanaan, pemantauan,
+evaluasi. They replaced the interim G1 SRL codes on 2026-11-03. No descriptor, no threshold and no
 per-indicator description is written, because the supervisors' rater guideline replaces all of it
 (PRD §13) — the flags and the note in `descriptors` say so. The calibration examples are Atthar's
 contribution (PRD §14): pass them as a JSON list with --calibration, or the row is written empty and
@@ -48,14 +49,14 @@ LEVEL_NAMES = {
     "C5": "Evaluate",
     "C6": "Create",
 }
-INDICATORS = ["elaborasi", "organisasi", "orientasi", "evaluasi"]
+INDICATORS = ["orientasi", "perencanaan", "pemantauan", "evaluasi"]
 DIMENSIONS = ["cognitive", "metacognitive"]
 
 RUBRIC_NOTE = (
-    "Rubrik interim: empat kode SRL G1 sebagai placeholder untuk dimensi metakognitif, dan enam kode "
-    "level Bloom revisi (Anderson & Krathwohl, 2001) beserta namanya untuk dimensi kognitif. Pedoman "
-    "penilaian dari pembimbing menggantikan seluruh isi ini (PRD §13). Tidak ada ambang batas yang "
-    "ditulis di sini."
+    "Rubrik interim: empat indikator regulasi metakognitif (orientasi, perencanaan, pemantauan, "
+    "evaluasi; Bab II.2.4) untuk dimensi metakognitif, bersifat nominal, dan enam kode level Bloom "
+    "revisi (Anderson & Krathwohl, 2001) beserta namanya untuk dimensi kognitif. Rubrik akhir "
+    "ditetapkan sebelum pelabelan penilai ahli (Bab III.2.2). Tidak ada ambang batas yang ditulis di sini."
 )
 CALIBRATION_NOTE = (
     "Blok kalibrasi per agen adalah kontribusi Atthar (PRD §14), termasuk contoh sintetis untuk level "
@@ -148,6 +149,12 @@ def _seed_rubric(conn: psycopg.Connection[dict[str, Any]], owner_id: uuid.UUID) 
             Jsonb(content["indicators"]),
             Jsonb(content["descriptors"]),
         ),
+    )
+    # The owner's assignments move to the new version; every past run keeps the version it snapshotted.
+    conn.execute(
+        "update assignments set rubric_version_id = "
+        "(select id from rubric_versions where owner_id = %s and version = %s) where owner_id = %s",
+        (owner_id, version, owner_id),
     )
     return f"rubric v{version} inserted ({len(LEVELS)} levels, {len(INDICATORS)} indicators)"
 

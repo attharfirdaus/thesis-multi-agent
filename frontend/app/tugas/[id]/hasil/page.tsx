@@ -4,7 +4,7 @@ import { Fragment, useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 
-import { AppShell } from "@/components/app-shell";
+import { AdminOnly, AppShell } from "@/components/app-shell";
 import { StatusBadge, runStatus } from "@/components/status-badge";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
@@ -256,6 +256,16 @@ export default function HasilPage() {
                       </>
                     ) : null}
                   </p>
+                  {run.model_unavailable ? (
+                    <Alert variant="destructive">
+                      <AlertDescription>
+                        Model yang dipakai penilaian ini sudah tidak tersedia pada penyedia, sehingga kiriman
+                        yang tersisa tidak dinilai dengan model lain.
+                      </AlertDescription>
+                    </Alert>
+                  ) : null}
+                  {/* Research data is the admin's (Bab III.3). */}
+                  <AdminOnly>
                   <div className="flex flex-col gap-2 border-t pt-4">
                     <p className="text-sm text-muted-foreground">
                       Berkas riset berbeda dari berkas penilaian: isinya seluruh penilaian pada tugas ini
@@ -268,8 +278,12 @@ export default function HasilPage() {
                       <Button asChild variant="outline">
                         <a href={`${API_BASE}/assignments/${id}/research-export.xlsx`}>Ekspor riset (XLSX)</a>
                       </Button>
+                      <Button asChild variant="outline">
+                        <a href={`${API_BASE}/assignments/${id}/segments.xlsx`}>Lembar segmen penilai (XLSX)</a>
+                      </Button>
                     </div>
                   </div>
+                  </AdminOnly>
                 </CardContent>
               </Card>
 

@@ -7,7 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app import db
 from app.config import get_settings
-from app.routers import assignments, auth, export, health, ingest, reviews, runs
+from app.routers import admin, assignments, auth, export, health, ingest, reviews, runs
 
 
 @asynccontextmanager
@@ -34,3 +34,4 @@ app.include_router(runs.router)
 app.include_router(assignments.router)
 app.include_router(reviews.router)
 app.include_router(export.router)
+app.include_router(admin.router)

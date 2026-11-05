@@ -11,6 +11,7 @@ export const FLAG_SENTENCES: Record<string, string> = {
   single_agent_failed: "Penilaian baseline gagal — coba jalankan ulang.",
   synthesis_agent_failed: "Penjelasan dan umpan balik belum bisa dibuat.",
   synthesis_retried: "Penjelasan disusun ulang karena kutipan tidak ditemukan.",
+  synthesis_inconsistency: "Alasan penilaian tidak sesuai dengan kutipan buktinya.",
   evidence_unverified: "Kutipan bukti tidak ditemukan pada tulisan mahasiswa.",
   needs_review: "Perlu ditinjau dosen.",
 };
@@ -47,29 +48,34 @@ export const submissionLabel = (pseudonym: string, realName?: string | null): st
   realName ? `${realName} (${pseudonym})` : pseudonym;
 
 /**
- * The metacognitive dimension's words for how strong an indicator is. They are the rubric's words for
- * that dimension, but they do not sit in `rubric.levels` (which carries the cognitive scale alone), so
- * they are named here and the runnable check keeps this list equal to `Strength` in
- * backend/app/agents/models.py.
- */
-export const STRENGTH_WORDS = ["lemah", "sedang", "kuat"];
-
-/**
- * A metacognitive score stores presence instead of a strength when an agent reports one without the
- * other (`app/agents/persist.py` writes `absent` and `present`). The rubric's own words pass through,
- * and when the rubric's levels are at hand anything outside them is machine vocabulary, not a level.
+ * A metacognitive indicator is nominal (Bab II.2.4): the backend stores `present` or `absent`
+ * (`app/agents/persist.py`). Runs scored before 2026-11-03 stored a strength word instead (lemah, sedang,
+ * kuat); those read as present. When the rubric's levels are at hand anything outside them is machine
+ * vocabulary, not a level.
  */
 const PRESENCE_LEVELS: Record<string, string> = {
   absent: "Tidak ditemukan",
   present: "Ada",
+  lemah: "Ada",
+  sedang: "Ada",
+  kuat: "Ada",
 };
+
+/** The two values a metacognitive override may take, with their labels. */
+export const PRESENCE_OPTIONS = ["present", "absent"];
 
 export function scoreLevel(level: string, rubricLevels: string[] = []): string {
   if (PRESENCE_LEVELS[level] !== undefined) return PRESENCE_LEVELS[level];
-  if (STRENGTH_WORDS.includes(level)) return level;
   if (rubricLevels.length === 0 || rubricLevels.includes(level)) return level;
   return "Tidak ditemukan";
 }
+
+/** Tabel III.4: why a submission sits outside the evaluation set. */
+export const EXCLUSION_LABELS: Record<string, string> = {
+  calibration_source: "Sumber contoh kalibrasi",
+  author_own: "Milik penulis sebagai peserta",
+  unreadable_or_unsegmentable: "Tidak dapat dibaca atau dipisahkan",
+};
 
 /**
  * The rubric's own name for a level, beside its code (`C4 Analyze`). The name comes from the rubric row

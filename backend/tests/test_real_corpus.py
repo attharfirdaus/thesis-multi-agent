@@ -26,8 +26,11 @@ from app.agents.models import (
     CognitiveResult,
     IndicatorFinding,
     MetacognitiveResult,
+    SegmentIndicators,
+    SegmentLevel,
     SynthesisResult,
 )
+from app.agents.segments import split_segments
 from app.llm.client import Completion
 from scripts.seed_rubric import seed as seed_rubric
 
@@ -40,51 +43,42 @@ CALIBRATION_PATH = pathlib.Path(__file__).resolve().parents[1] / "scripts" / "ca
 
 
 class QuoteStub:
-    """Answers every agent with a slice of the submission's own real analysis text."""
+    """Answers every agent with a slice of each segment of the submission's own real analysis text."""
 
-    def __init__(self, quotes: list[str]) -> None:
-        self.quotes = quotes
+    def __init__(self, segments) -> None:
+        self.segments = segments
         self.calls = 0
 
-    def complete_json(self, *, system, user, schema, temperature=None, seed=None):
+    def complete_json(self, *, system, user, schema, check=None, **_kwargs):
         self.calls += 1
-        quote = self.quotes[self.calls % len(self.quotes)]
+        quotes = [(segment.index, segment.text.strip()[:60].strip()) for segment in self.segments]
         payload = {
             CognitiveResult: CognitiveResult(
-                level="C4",
-                evidence_quote=quote,
-                rationale="Mahasiswa membandingkan dua kerangka kerja pada bagian ini.",
+                segments=[
+                    SegmentLevel(
+                        segment=index,
+                        level="C4",
+                        evidence_quote=quote,
+                        rationale="Mahasiswa membandingkan dua kerangka kerja pada bagian ini.",
+                    )
+                    for index, quote in quotes
+                ]
             ),
             MetacognitiveResult: MetacognitiveResult(
-                findings=[
-                    IndicatorFinding(
-                        indicator="elaborasi",
-                        present=True,
-                        strength="kuat",
-                        evidence_quote=quote,
-                        rationale="Membandingkan dua kerangka dan menjelaskan fokus masing-masing.",
-                    ),
-                    IndicatorFinding(
-                        indicator="evaluasi",
-                        present=True,
-                        strength="sedang",
-                        evidence_quote=self.quotes[0],
-                        rationale="Menilai keterbatasan tiap kerangka.",
-                    ),
-                    IndicatorFinding(
-                        indicator="organisasi",
-                        present=False,
-                        strength=None,
-                        evidence_quote="",
-                        rationale="Tidak terlihat penataan ulang materi.",
-                    ),
-                    IndicatorFinding(
-                        indicator="orientasi",
-                        present=False,
-                        strength=None,
-                        evidence_quote="",
-                        rationale="Tidak ada perumusan tujuan belajar.",
-                    ),
+                segments=[
+                    SegmentIndicators(
+                        segment=index,
+                        indicators=[
+                            IndicatorFinding(
+                                indicator="evaluasi",
+                                evidence_quote=quote,
+                                rationale="Menilai keterbatasan pemahamannya sendiri.",
+                            )
+                        ]
+                        if index == 1
+                        else [],
+                    )
+                    for index, quote in quotes
                 ]
             ),
             SynthesisResult: SynthesisResult(
@@ -92,6 +86,8 @@ class QuoteStub:
                 feedback_text="Perbandingan Anda baik; tambahkan contoh penerapan pada konteks MRTI.",
             ),
         }[schema]
+        if check is not None:
+            check(payload)
         return Completion(
             parsed=payload, raw=json.dumps(payload.model_dump()), latency_ms=3, attempts=1
         )
@@ -149,10 +145,7 @@ def test_real_submissions_score_with_offsets_in_their_own_text(client, monkeypat
     run_id = run.json()["id"]
 
     def fake_evaluate(state, checkpointer=None):
-        text = state["student_analysis_text"]
-        midpoint = len(text) // 2
-        quotes = [text[midpoint : midpoint + 120].strip(), text[40:140].strip()]
-        stub = QuoteStub([quote for quote in quotes if quote] or [text[:60].strip()])
+        stub = QuoteStub(split_segments(state["student_analysis_text"]))
         return graph_module.evaluate_submission(state, client=stub, checkpointer=checkpointer)
 
     monkeypatch.setattr("app.jobs.worker.evaluate_submission", fake_evaluate)

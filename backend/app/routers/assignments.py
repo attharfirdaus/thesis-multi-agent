@@ -154,7 +154,8 @@ def get_assignment(assignment_id: uuid.UUID, user: CurrentUser) -> AssignmentDet
         runs = cur.execute(
             # A run needs review when one of its submissions carries a flag from the pipeline
             # (PRD §6). Counted inside the same query rather than one lookup per run.
-            "select r.id, r.status, r.mode, "
+            "select r.id, r.status, r.mode, r.repetition_index, r.repetitions, r.final_evaluation, "
+            "       r.model_unavailable, "
             "       (select count(*) from submissions s join jobs j on j.submission_id = s.id "
             "        where j.run_id = r.id and jsonb_array_length(s.review_flags) > 0) as needs_review "
             "from runs r where r.assignment_id = %s order by r.created_at desc",
@@ -175,6 +176,10 @@ def get_assignment(assignment_id: uuid.UUID, user: CurrentUser) -> AssignmentDet
                 id=run["id"],
                 status=run["status"],
                 mode=run["mode"],
+                repetition_index=run["repetition_index"],
+                repetitions=run["repetitions"],
+                final_evaluation=run["final_evaluation"],
+                model_unavailable=run["model_unavailable"],
                 jobs=jobs.get(run["id"], {}),
                 needs_review=run["needs_review"],
             )

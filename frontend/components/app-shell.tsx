@@ -1,11 +1,24 @@
 "use client";
 
-import { useEffect, useState, type ReactNode } from "react";
+import { createContext, useContext, useEffect, useState, type ReactNode } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 
 import { Button } from "@/components/ui/button";
 import { ApiError, api, type User } from "@/lib/api";
+
+const UserContext = createContext<User | null>(null);
+
+/** The signed-in user, for a screen that shows admin-only controls (Bab III.3). */
+export const useCurrentUser = () => useContext(UserContext);
+
+/**
+ * Renders its children only for an admin. A component, not a hook, because the screens render the
+ * shell themselves: only what sits inside it can read the user.
+ */
+export function AdminOnly({ children }: { children: ReactNode }) {
+  return useCurrentUser()?.role === "admin" ? <>{children}</> : null;
+}
 
 /**
  * The frame every signed-in screen shares: left sidebar, wordmark, sign-out.
@@ -55,6 +68,11 @@ export function AppShell({ children }: { children: ReactNode }) {
   }
 
   const dashActive = pathname === "/dasbor";
+  const adminActive = pathname === "/admin";
+  const linkClass = (active: boolean) =>
+    `block rounded-lg px-3 py-2 text-base transition-colors hover:bg-muted ${
+      active ? "bg-muted font-medium text-primary" : "text-foreground"
+    }`;
 
   return (
     <div className="flex min-h-screen flex-col md:flex-row">
@@ -64,15 +82,14 @@ export function AppShell({ children }: { children: ReactNode }) {
             Penilaian Kedalaman Analisis Mahasiswa
           </p>
           <nav aria-label="Navigasi utama">
-            <Link
-              href="/dasbor"
-              aria-current={dashActive ? "page" : undefined}
-              className={`block rounded-lg px-3 py-2 text-base transition-colors hover:bg-muted ${
-                dashActive ? "bg-muted font-medium text-primary" : "text-foreground"
-              }`}
-            >
+            <Link href="/dasbor" aria-current={dashActive ? "page" : undefined} className={linkClass(dashActive)}>
               Dasbor
             </Link>
+            {user?.role === "admin" ? (
+              <Link href="/admin" aria-current={adminActive ? "page" : undefined} className={linkClass(adminActive)}>
+                Admin
+              </Link>
+            ) : null}
           </nav>
           <div className="mt-auto flex flex-col gap-2">
             <p className="text-sm text-muted-foreground">{user?.name}</p>
@@ -83,7 +100,9 @@ export function AppShell({ children }: { children: ReactNode }) {
         </div>
       </aside>
       <main className="flex-1 bg-muted/40 px-6 py-8">
-        <div className="mx-auto flex max-w-5xl flex-col gap-6">{children}</div>
+        <UserContext.Provider value={user}>
+          <div className="mx-auto flex max-w-5xl flex-col gap-6">{children}</div>
+        </UserContext.Provider>
       </main>
     </div>
   );

@@ -16,6 +16,7 @@ leaving the rest of the batch intact (PRD §11).
 
 import json
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any, TypeVar
 
@@ -34,6 +35,13 @@ class ProviderNotConfigured(RuntimeError):
 
 class ProviderError(RuntimeError):
     """The provider was not reachable, or never returned a response matching the schema."""
+
+
+class ModelUnavailable(ProviderError):
+    """The configured model is no longer served by the provider (Bab III, KNF-04).
+
+    Not retried: the run is flagged instead of being silently scored by some other model.
+    """
 
 
 @dataclass(frozen=True)
@@ -66,6 +74,7 @@ class ProviderClient:
         schema: type[SchemaT],
         temperature: float | None = None,
         seed: int | None = None,
+        check: Callable[[BaseModel], None] | None = None,
     ) -> Completion:
         """Send one request and return the response parsed into `schema`.
 
@@ -73,7 +82,9 @@ class ProviderClient:
         constrained decoding, and inside the prompt because not every free endpoint honours it.
 
         `temperature` and `seed` fall back to configuration, so the caller decides reproducibility
-        per run and never by editing a constant here.
+        per run and never by editing a constant here. `check` is the caller's own validation of a
+        schema-valid answer (a level outside the rubric, a segment left unlabelled): it raises
+        `ValueError`, and that answer is retried exactly like one that failed the schema.
         """
         settings = self._settings
         base_url, api_key, model = self._route(settings)
@@ -123,8 +134,8 @@ class ProviderClient:
         attempts = settings.llm_max_attempts
         if self._http is None:
             with httpx.Client(timeout=settings.llm_timeout_seconds) as http:
-                return self._send(http, request, schema, attempts)
-        return self._send(self._http, request, schema, attempts)
+                return self._send(http, request, schema, attempts, check)
+        return self._send(self._http, request, schema, attempts, check)
 
     @staticmethod
     def _route(settings: Settings) -> tuple[str, str, str]:
@@ -160,7 +171,12 @@ class ProviderClient:
             raise ProviderError(f"refusing to send the payload: {exc}") from exc
 
     def _send(
-        self, http: httpx.Client, request: httpx.Request, schema: type[SchemaT], attempts: int
+        self,
+        http: httpx.Client,
+        request: httpx.Request,
+        schema: type[SchemaT],
+        attempts: int,
+        check: Callable[[BaseModel], None] | None = None,
     ) -> Completion:
         """Post `request`, retrying any unusable answer up to `attempts` times in total."""
         last_reason = "no attempt was made"
@@ -168,9 +184,15 @@ class ProviderClient:
             started = time.perf_counter()
             try:
                 response = http.send(request)
+                if _model_gone(response):
+                    raise ModelUnavailable(
+                        f"the provider no longer serves the configured model: {response.text[:300]}"
+                    )
                 response.raise_for_status()
                 raw = response.json()["choices"][0]["message"]["content"]
                 parsed = schema.model_validate(json.loads(raw))
+                if check is not None:
+                    check(parsed)
             # Transport failures, a non-2xx status, malformed JSON, a missing choice and a schema
             # violation are one case on purpose: the only thing to do with any of them is try again,
             # and only the reason differs. ValidationError is a ValueError.
@@ -186,3 +208,16 @@ class ProviderClient:
         raise ProviderError(
             f"no valid {schema.__name__} in {attempts} attempts; last: {last_reason}"
         )
+
+
+def _model_gone(response: httpx.Response) -> bool:
+    """Whether the provider says the requested model does not exist.
+
+    ponytail: status + wording heuristic (404, or a 400 that names the model as unknown); replace with
+    the provider's documented error code once one is published for this route.
+    """
+    if response.status_code not in (400, 404):
+        return False
+    body = response.text.lower()
+    gone = ("not found", "no such", "does not exist", "unknown")
+    return "model" in body and any(word in body for word in gone)

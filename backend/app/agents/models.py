@@ -17,67 +17,88 @@ from typing import Annotated, Literal, TypedDict
 
 from pydantic import BaseModel, Field
 
-#: The rubric's own words for how strong a trace is (Atthar's calibration, PRD §14). Indonesian, like
-#: the rest of the rubric content: this value ends up in `system_scores.level` for a metacognitive row
-#: and is read by a lecturer, so it is not translated into a second vocabulary.
-Strength = Literal["lemah", "sedang", "kuat"]
+from app.agents.segments import Segment
+
+
+class SegmentLevel(BaseModel):
+    """The Bloom level of one segment of the student's analysis (Bab III.6, III.8). Exactly one level per
+    segment: the levels are ordinal and mutually exclusive. The level must be one of the rubric's levels;
+    the graph rejects anything else and the call is retried rather than an invented label stored."""
+
+    segment: int = Field(ge=1, description="The segment number, as shown in brackets in the input.")
+    level: str = Field(description="Exactly one of the rubric's cognitive levels.")
+    evidence_quote: str = Field(
+        min_length=1, description="Verbatim text from this segment of the student's analysis."
+    )
+    rationale: str = Field(min_length=5, description="Why this level, in one sentence.")
 
 
 class CognitiveResult(BaseModel):
-    """Bloom level for the student's own analysis. The level must be one of the rubric's levels;
-    the pipeline rejects anything else rather than storing an invented label."""
-
-    level: str = Field(description="Exactly one of the rubric's cognitive levels.")
-    evidence_quote: str = Field(min_length=10, description="Verbatim text from the student's analysis.")
-    rationale: str = Field(min_length=10, description="Why this level, in one or two sentences.")
+    segments: list[SegmentLevel] = Field(min_length=1, description="One entry for every segment.")
 
 
 class IndicatorFinding(BaseModel):
+    """One metacognitive indicator found in one segment. Indicators are nominal (Bab II.2.4): a finding
+    says the indicator is present, with the quote that shows it; absence is the finding's absence."""
+
     indicator: str = Field(description="Exactly one of the rubric's metacognitive indicator codes.")
-    present: bool
-    strength: Strength | None = Field(
-        default=None, description="Only meaningful when present is true."
-    )
     evidence_quote: str = Field(
-        default="", description="Verbatim text from the student's analysis; empty when absent."
+        min_length=1, description="Verbatim text from this segment of the student's analysis."
     )
     rationale: str = Field(min_length=5)
 
 
+class SegmentIndicators(BaseModel):
+    segment: int = Field(ge=1, description="The segment number, as shown in brackets in the input.")
+    indicators: list[IndicatorFinding] = Field(
+        default_factory=list, description="The indicators present in this segment; may be empty."
+    )
+
+
 class MetacognitiveResult(BaseModel):
-    findings: list[IndicatorFinding] = Field(min_length=1)
+    segments: list[SegmentIndicators] = Field(min_length=1, description="One entry for every segment.")
 
 
-class SingleAgentResult(CognitiveResult):
-    """The single-agent baseline's answer, in one object (FR-15, PRD §12).
+class SingleAgentResult(BaseModel):
+    """The single-agent baseline's answer, in one object (FR-15, Bab III.8).
 
-    One call judges the whole rubric, so the model returns the cognitive level with its quote and
-    rationale plus the metacognitive findings together. This is a baseline shape, not a merged
-    multi-agent result: nothing here reconciles two independent calls, which is exactly the
-    difference the comparison is meant to expose (PRD §12). The graph splits it back into
-    `CognitiveResult` and `MetacognitiveResult` so evidence checking and persistence keep one path.
+    One call judges the whole rubric, so the model returns both dimensions' segment labels together.
+    This is a baseline shape, not a merged multi-agent result: nothing here reconciles two independent
+    calls, which is exactly the difference the comparison is meant to expose. The graph splits it back
+    into `CognitiveResult` and `MetacognitiveResult` so evidence checking and persistence keep one path.
     """
 
-    findings: list[IndicatorFinding] = Field(min_length=1)
+    cognitive: list[SegmentLevel] = Field(min_length=1, description="One entry for every segment.")
+    metacognitive: list[SegmentIndicators] = Field(
+        min_length=1, description="One entry for every segment."
+    )
 
 
 class SynthesisResult(BaseModel):
     """What the lecturer reads. `rationale` explains the scores, `feedback_text` is the per-student
-    feedback of FR-19 that the lecturer may edit before export."""
+    feedback of FR-19 that the lecturer may edit before export, and `inconsistencies` lists every place
+    where an agent's rationale does not match the quote it rests on (Bab III.4) — each one sends the
+    submission to the lecturer for review."""
 
     rationale: str = Field(min_length=20)
     feedback_text: str = Field(min_length=20)
+    inconsistencies: list[str] = Field(
+        default_factory=list,
+        description="Each mismatch between a rationale and its quoted evidence; empty when none.",
+    )
 
 
 class EvidenceSpan(BaseModel):
     """A quote that was located in the stored text, with the offsets the database will keep.
 
-    Offsets point into `student_analysis_text`, or into `ai_output_text` when the synthesis agent
-    quotes the AI answer while explaining itself. `source` says which agent produced the quote, so a
-    lecturer can see who is being held to account for it.
+    Offsets point into `student_analysis_text`, never into the AI output: the AI output is the object of
+    analysis, not a source of evidence. `segment` (and `indicator`, for a metacognitive finding) say which
+    label the quote backs; `source` says which agent produced it.
     """
 
     source: Literal["cognitive", "metacognitive"]
+    segment: int
+    indicator: str | None = None
     quote: str
     start_offset: int = Field(ge=0)
     end_offset: int = Field(ge=0)
@@ -95,6 +116,11 @@ def _merge_lists(left: list[str], right: list[str]) -> list[str]:
 
 def _merge_maps(left: dict[str, int], right: dict[str, int]) -> dict[str, int]:
     """Reducer for `latencies`: the two analysis agents measure their own calls in parallel."""
+    return {**left, **right}
+
+
+def _merge_strings(left: dict[str, str], right: dict[str, str]) -> dict[str, str]:
+    """Reducer for `inputs`, for the same reason as `latencies`."""
     return {**left, **right}
 
 
@@ -118,6 +144,8 @@ class GraphState(TypedDict, total=False):
     # Input, already redacted by phase 3. Nothing else from the submission ever enters this state.
     student_analysis_text: str
     ai_output_text: str
+    # The assessed units of the analysis (Bab III.6), set by `preprocess`.
+    segments: list[Segment]
 
     # Agent output.
     cognitive: CognitiveResult | None
@@ -141,3 +169,5 @@ class GraphState(TypedDict, total=False):
     # AgentTrace.latency_ms). Collected here because the client has no run or submission context, and
     # a free provider's latency is what the performance target in PRD §11 is set from.
     latencies: Annotated[dict[str, int], _merge_maps]
+    # The user turn each agent call sent, per agent (Bab III, KNF-04: every step records its input).
+    inputs: Annotated[dict[str, str], _merge_strings]

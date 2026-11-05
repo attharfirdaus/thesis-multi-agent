@@ -138,6 +138,15 @@ class RunOut(BaseModel):
     id: UUID
     status: str
     mode: str
+    #: Bab III.2.4/III.9: the R runs created together with one configuration share a group.
+    repetition_group: UUID | None = None
+    repetition_index: int = 1
+    repetitions: int = 1
+    #: Every run of the group, on the create response only, so a caller can drive them all.
+    group_run_ids: list[UUID] = Field(default_factory=list)
+    final_evaluation: bool = False
+    #: The provider no longer serves the model this run snapshotted (KNF-04).
+    model_unavailable: bool = False
     jobs: dict[str, int] = Field(default_factory=dict)
     needs_review: int = 0
     processed: int = 0
@@ -207,6 +216,17 @@ class RunRefOut(BaseModel):
     mode: str
 
 
+class CommentOut(BaseModel):
+    id: UUID
+    system_score_id: UUID
+    body: str
+    created_at: dt.datetime
+
+
+class CommentIn(BaseModel):
+    body: str = Field(min_length=1, max_length=4000)
+
+
 class SubmissionScoreOut(BaseModel):
     """A score with the evidence the detail view highlights. Distinct from `ScoreOut`, which carries
     no id because the results table does not act on a score."""
@@ -217,6 +237,24 @@ class SubmissionScoreOut(BaseModel):
     level: str
     rationale: str | None = None
     evidence: list[EvidenceOut] = Field(default_factory=list)
+    comments: list[CommentOut] = Field(default_factory=list)
+
+
+class SegmentScoreOut(BaseModel):
+    """One segment's label (Bab III.6): the unit behind the text-level score."""
+
+    id: UUID
+    segment_index: int
+    segment_start: int
+    segment_end: int
+    dimension: Literal["cognitive", "metacognitive"]
+    indicator: str | None = None
+    level: str
+    rationale: str | None = None
+    evidence: list[EvidenceOut] = Field(default_factory=list)
+
+
+ExclusionReason = Literal["calibration_source", "author_own", "unreadable_or_unsegmentable"]
 
 
 class ReviewIn(BaseModel):
@@ -254,5 +292,82 @@ class SubmissionDetailOut(BaseModel):
     rubric: RubricOut | None = None
     run: RunRefOut | None = None
     scores: list[SubmissionScoreOut] = Field(default_factory=list)
+    segment_scores: list[SegmentScoreOut] = Field(default_factory=list)
     feedback: FeedbackOut | None = None
     reviews: list[ReviewOut] = Field(default_factory=list)
+    exclusion_reason: ExclusionReason | None = None
+
+
+class ExclusionPatch(BaseModel):
+    """Tabel III.4. `None` puts the submission back into the evaluation set."""
+
+    reason: ExclusionReason | None = None
+
+
+# --------------------------------------------------------------- admin area (Bab III.3)
+
+
+class AdminUserOut(BaseModel):
+    id: UUID
+    email: str
+    name: str
+    role: Literal["lecturer", "admin"]
+    created_at: dt.datetime
+
+
+class RubricVersionOut(BaseModel):
+    id: UUID
+    version: int
+    levels: list[str]
+    indicators: list[str]
+    descriptors: dict
+    frozen_at: dt.datetime | None = None
+    created_at: dt.datetime
+
+
+class RubricIn(BaseModel):
+    """A new rubric version (KF-12). Versions are immutable; saving always inserts version + 1."""
+
+    levels: list[str] = Field(min_length=1)
+    indicators: list[str] = Field(min_length=1)
+    descriptors: dict = Field(default_factory=dict)
+
+
+class PromptVersionOut(BaseModel):
+    id: UUID
+    agent_name: str
+    version: int
+    frozen_at: dt.datetime | None = None
+    created_at: dt.datetime
+
+
+class AdminConfigOut(BaseModel):
+    #: What a new run would snapshot (FR-13); the API key is never part of it.
+    llm: dict
+    prompt_versions: list[PromptVersionOut]
+
+
+class AdminRunOut(BaseModel):
+    id: UUID
+    assignment_id: UUID
+    assignment_title: str
+    mode: str
+    status: str
+    repetition_group: UUID | None = None
+    repetition_index: int
+    repetitions: int
+    final_evaluation: bool
+    model_unavailable: bool
+    model: str | None = None
+    created_at: dt.datetime
+
+
+class TraceOut(BaseModel):
+    id: UUID
+    submission_pseudonym: str | None = None
+    agent_name: str
+    input_ref: str | None = None
+    output_json: dict | None = None
+    latency_ms: int | None = None
+    error: str | None = None
+    created_at: dt.datetime

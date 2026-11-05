@@ -25,6 +25,7 @@ from app.agents.models import GraphState
 from app.agents.persist import persist_submission_result
 from app.config import get_settings
 from app.jobs.queue import claim_jobs
+from app.llm.client import ModelUnavailable
 
 # A submission that fails this many times is not retried: the model or the prompt is wrong, not the
 # network, and the lecturer should see the job in the failed list rather than wait on it.
@@ -39,10 +40,15 @@ BATCH = 25
 CHECKPOINT_STATE_TYPES = (
     "CognitiveResult",
     "MetacognitiveResult",
+    "SegmentLevel",
+    "SegmentIndicators",
+    "IndicatorFinding",
     "SynthesisResult",
     "SingleAgentResult",
     "EvidenceSpan",
 )
+#: Types the graph state holds that live outside `app.agents.models`.
+CHECKPOINT_EXTRA_TYPES = (("app.agents.segments", "Segment"),)
 
 
 def _requeue_stale(conn, *, owner_id: UUID, run_id: UUID) -> None:
@@ -80,7 +86,7 @@ def _load_state(conn, *, owner_id: UUID, run_id: UUID, submission_id: UUID) -> G
         cur.execute(
             """
             select submissions.student_analysis_text, submissions.ai_output_text,
-                   runs.prompt_version_ids, runs.mode,
+                   runs.prompt_version_ids, runs.mode, runs.model_config,
                    rubric_versions.version as rubric_version,
                    rubric_versions.dimensions, rubric_versions.levels,
                    rubric_versions.indicators, rubric_versions.descriptors
@@ -95,6 +101,14 @@ def _load_state(conn, *, owner_id: UUID, run_id: UUID, submission_id: UUID) -> G
             raise LookupError(f"run {run_id} has no submission {submission_id} for its owner")
         if row["dimensions"] is None:
             raise LookupError(f"run {run_id} has no rubric version, so nothing can be scored against it")
+        # The run is scored by the model it snapshotted, or not at all (KNF-04): a configuration that
+        # now names another model would silently change what the run measures.
+        configured = get_settings().llm_model
+        snapshot = (row["model_config"] or {}).get("model")
+        if snapshot and configured and snapshot != configured:
+            raise ModelUnavailable(
+                f"run {run_id} was created with model {snapshot!r}, but {configured!r} is configured"
+            )
         cur.execute(
             "select template from prompt_versions where id = any(%s) and agent_name = 'calibration'",
             (row["prompt_version_ids"],),
@@ -121,6 +135,21 @@ def _load_state(conn, *, owner_id: UUID, run_id: UUID, submission_id: UUID) -> G
         student_analysis_text=row["student_analysis_text"] or "",
         ai_output_text=row["ai_output_text"] or "",
     )
+
+
+def _flag_model_unavailable(owner_id: UUID, job: dict, error: Exception) -> None:
+    """Fail the job without retrying and mark the run (KNF-04): retrying cannot bring a model back,
+    and the run must say why it stopped rather than look like a run that merely failed."""
+    with db.tenant_tx(owner_id) as conn:
+        conn.execute(
+            "update jobs set status = 'failed', attempts = attempts + 1, last_error = %s, "
+            "updated_at = now() where id = %s and owner_id = %s",
+            (f"{type(error).__name__}: {error}", job["id"], owner_id),
+        )
+        conn.execute(
+            "update runs set model_unavailable = true where id = %s and owner_id = %s",
+            (job["run_id"], owner_id),
+        )
 
 
 def _record_failure(owner_id: UUID, job: dict, error: Exception) -> bool:
@@ -199,6 +228,7 @@ def _checkpointer():
                 allowed_msgpack_modules=[
                     ("app.agents.models", name) for name in CHECKPOINT_STATE_TYPES
                 ]
+                + list(CHECKPOINT_EXTRA_TYPES)
             ),
         )
 
@@ -213,6 +243,10 @@ def _run_one(owner_id: UUID, job: dict, summary: dict, checkpointer=None) -> Non
         # Outside tenant context on purpose: the graph calls a provider and can take seconds, and
         # holding a transaction across that would pin a pooled connection for the whole batch.
         result = evaluate_submission(state, checkpointer=checkpointer)
+    except ModelUnavailable as error:
+        _flag_model_unavailable(owner_id, job, error)
+        summary["failed"] += 1
+        return
     except Exception as error:  # noqa: BLE001 — a failed submission must never fail the batch
         summary["failed" if _record_failure(owner_id, job, error) else "skipped"] += 1
         return

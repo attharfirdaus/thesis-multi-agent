@@ -18,6 +18,7 @@ from openpyxl import Workbook
 from psycopg.rows import dict_row
 
 from app import db
+from app.agents.segments import split_segments
 from app.routers.auth import CurrentUser
 from app.schemas import UserOut
 
@@ -74,7 +75,7 @@ left join lateral (
     where system_score_id = sc.id
     order by reviewed_at desc, id desc limit 1
 ) lr on true
-where sc.run_id = %s
+where sc.run_id = %s and sc.segment_index is null
 order by s.pseudonym, sc.dimension, sc.indicator, e.start_offset
 """
 
@@ -199,6 +200,19 @@ RESEARCH_COLUMNS = [
     "rubric_version",
     "started_at",
     "finished_at",
+    # Appended, never inserted, so the notebook's positional reads above stay valid (2026-11-03).
+    # `segment_index` empty = the text-level score; otherwise the unit the raters labelled (Bab III.6).
+    "segment_index",
+    "segment_start",
+    "segment_end",
+    "segment_text",
+    "exclusion_reason",
+    "repetition_group",
+    "repetition_index",
+    "repetitions",
+    "final_evaluation",
+    "model_unavailable",
+    "lecturer_comments",
 ]
 
 _RESEARCH_SQL = """
@@ -211,7 +225,14 @@ select a.title as assignment_title,
        e.quote as evidence_quote, e.start_offset, e.end_offset,
        lr.action as review_action, lr.new_level as review_new_level, lr.reason as review_reason,
        lr.reviewed_at,
-       at.output_json ->> 'feedback_text' as feedback_text
+       at.output_json ->> 'feedback_text' as feedback_text,
+       sc.segment_index, sc.segment_start, sc.segment_end,
+       substr(s.student_analysis_text, sc.segment_start + 1, sc.segment_end - sc.segment_start)
+           as segment_text,
+       s.exclusion_reason,
+       r.repetition_group, r.repetition_index, r.repetitions, r.final_evaluation, r.model_unavailable,
+       (select string_agg(c.body, ' | ' order by c.created_at) from score_comments c
+        where c.system_score_id = sc.id) as lecturer_comments
 from assignments a
 join runs r on r.assignment_id = a.id
 join rubric_versions rv on rv.id = r.rubric_version_id
@@ -225,16 +246,19 @@ left join lateral (
     where system_score_id = sc.id order by reviewed_at desc limit 1
 ) lr on true
 where a.id = %s
-order by s.pseudonym, r.mode, sc.dimension, sc.indicator
+order by s.pseudonym, r.mode, r.repetition_index, sc.segment_index nulls first, sc.dimension, sc.indicator
 """
 
 
 def _research_rows(assignment_id: uuid.UUID, user: UserOut) -> list[dict]:
-    """The assignment's research rows, or 404 when it is not this lecturer's.
+    """The assignment's research rows, or 404 when it is not this lecturer's. Admin only: exporting the
+    research dataset is a researcher's operation (Bab III.3, KF-12).
 
     Inner joins all the way to `system_scores` on purpose: a run that produced no scores contributes nothing
     to a dataset about scores, and its absence is visible in the app rather than as blank rows here.
     """
+    if user.role != "admin":
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin only.")
     with db.tenant_tx(user.id) as conn, conn.cursor(row_factory=dict_row) as cur:
         assignment = cur.execute("select id from assignments where id = %s", (assignment_id,)).fetchone()
         if assignment is None:
@@ -271,6 +295,17 @@ def _research_cells(row: dict) -> list:
         row["rubric_version"],
         _stamp(row["started_at"]),
         _stamp(row["finished_at"]),
+        row["segment_index"],
+        row["segment_start"],
+        row["segment_end"],
+        row["segment_text"],
+        row["exclusion_reason"],
+        None if row["repetition_group"] is None else str(row["repetition_group"]),
+        row["repetition_index"],
+        row["repetitions"],
+        row["final_evaluation"],
+        row["model_unavailable"],
+        row["lecturer_comments"],
     ]
 
 
@@ -294,4 +329,65 @@ def research_export_xlsx(assignment_id: uuid.UUID, user: CurrentUser) -> Respons
         [_research_cells(row) for row in rows],
         f"assignment-{assignment_id}-research.xlsx",
         sheet_title="Scores",
+    )
+
+
+# --------------------------------------------------------------------------- rater sheet (Bab III.6-7)
+
+#: The segments the expert raters label. Built from the same deterministic split the pipeline scores,
+#: and available before any run exists, because the raters finish labelling before the system runs
+#: (Bab III.9). Joined back to the research export on (submission_pseudonym, segment_index).
+SEGMENT_COLUMNS = [
+    "submission_pseudonym",
+    "exclusion_reason",
+    "segment_index",
+    "segment_start",
+    "segment_end",
+    "segment_text",
+    "ai_output_text",
+]
+
+
+def _segment_rows(assignment_id: uuid.UUID, user: UserOut) -> list[list]:
+    if user.role != "admin":
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin only.")
+    with db.tenant_tx(user.id) as conn, conn.cursor(row_factory=dict_row) as cur:
+        if cur.execute("select id from assignments where id = %s", (assignment_id,)).fetchone() is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Assignment not found.")
+        submissions = cur.execute(
+            "select pseudonym, exclusion_reason, coalesce(ai_output_text, '') as ai_output_text, "
+            "coalesce(student_analysis_text, '') as student_analysis_text "
+            "from submissions where assignment_id = %s order by pseudonym",
+            (assignment_id,),
+        ).fetchall()
+    return [
+        [
+            row["pseudonym"],
+            row["exclusion_reason"],
+            seg.index,
+            seg.start,
+            seg.end,
+            seg.text,
+            row["ai_output_text"],
+        ]
+        for row in submissions
+        for seg in split_segments(row["student_analysis_text"])
+    ]
+
+
+@router.get("/assignments/{assignment_id}/segments.csv")
+def segments_csv(assignment_id: uuid.UUID, user: CurrentUser) -> Response:
+    """The rater sheet's units, one row per segment."""
+    return _csv_response(
+        SEGMENT_COLUMNS, _segment_rows(assignment_id, user), f"assignment-{assignment_id}-segments.csv"
+    )
+
+
+@router.get("/assignments/{assignment_id}/segments.xlsx")
+def segments_xlsx(assignment_id: uuid.UUID, user: CurrentUser) -> Response:
+    return _xlsx_response(
+        SEGMENT_COLUMNS,
+        _segment_rows(assignment_id, user),
+        f"assignment-{assignment_id}-segments.xlsx",
+        sheet_title="Segments",
     )

@@ -46,7 +46,11 @@ def _run_out(cur, run_id: uuid.UUID, *, processed: int = 0, failed: int = 0) -> 
     One builder for the three endpoints that return a run, so a field added here — `in_flight` was —
     cannot show up on one screen and be missing on another.
     """
-    run = cur.execute("select id, status, mode from runs where id = %s", (run_id,)).fetchone()
+    run = cur.execute(
+        "select id, status, mode, repetition_group, repetition_index, repetitions, final_evaluation, "
+        "model_unavailable from runs where id = %s",
+        (run_id,),
+    ).fetchone()
     if run is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Run not found.")
     counts = cur.execute(
@@ -72,6 +76,11 @@ def _run_out(cur, run_id: uuid.UUID, *, processed: int = 0, failed: int = 0) -> 
         id=run["id"],
         status=run["status"],
         mode=run["mode"],
+        repetition_group=run["repetition_group"],
+        repetition_index=run["repetition_index"],
+        repetitions=run["repetitions"],
+        final_evaluation=run["final_evaluation"],
+        model_unavailable=run["model_unavailable"],
         jobs={row["status"]: row["n"] for row in counts},
         needs_review=needs_review,
         processed=processed,
@@ -106,15 +115,28 @@ def create_run(
     user: CurrentUser,
     mode: Annotated[str, Query(pattern="^(multi_agent|single_agent)$")] = "multi_agent",
     only_ungraded: Annotated[bool, Query()] = False,
+    repetitions: Annotated[int, Query(ge=1, le=10)] = 1,
+    final: Annotated[bool, Query()] = False,
 ) -> RunOut:
     """Snapshot the configuration and queue one job per submission (PRD §10 `Run`).
 
     `only_ungraded=true` queues only the submissions no run has scored yet, which is what a lecturer
-    uploading a new batch wants: the ones already marked are left alone. The default stays "every
-    submission" because PRD §11 measures run-to-run variance by scoring the same text repeatedly, so
-    re-grading has to remain reachable — it is a choice, not an accident.
+    uploading a new batch wants: the ones already marked are left alone.
+
+    `repetitions=R` creates R runs with the identical snapshot, sharing one `repetition_group`, for the
+    run-to-run consistency measure (Bab III.2.4, III.9). R is fixed here: a group never grows after its
+    results have been seen. The response is the first run; `group_run_ids` lists all of them.
+
+    `final=true` marks the runs as the final evaluation (Bab III.1): the rubric version and every prompt
+    and calibration version they reference are frozen at this moment. Both are research operations and
+    belong to the admin (Bab III.3, KF-11), as does the single-agent baseline.
     """
     require_csrf(request)
+    if (mode == "single_agent" or repetitions > 1 or final) and user.role != "admin":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Baseline, repeated and final-evaluation runs are admin operations.",
+        )
     with db.tenant_tx(user.id) as conn, conn.cursor(row_factory=dict_row) as cur:
         assignment = cur.execute(
             "select rubric_version_id from assignments where id = %s", (assignment_id,)
@@ -145,36 +167,64 @@ def create_run(
                 else "This assignment has no submissions to evaluate.",
             )
 
-        prompt_versions = cur.execute(
-            "select id from prompt_versions where owner_id = %s", (user.id,)
-        ).fetchall()
-        if not prompt_versions:
+        # The newest version of each prompt and of the calibration, never every version ever seeded:
+        # the worker reads the run's calibration from this list, and two calibration rows in it would
+        # make that read pick one arbitrarily.
+        prompt_version_ids = [
+            row["id"]
+            for row in cur.execute(
+                "select distinct on (agent_name) id from prompt_versions where owner_id = %s "
+                "order by agent_name, version desc",
+                (user.id,),
+            ).fetchall()
+        ]
+        if not prompt_version_ids:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
                 detail="No prompt versions are seeded for this account; run scripts/seed_rubric.py first.",
             )
 
-        created = cur.execute(
-            "insert into runs (owner_id, assignment_id, mode, model_config, rubric_version_id, "
-            "prompt_version_ids, status) values (%s, %s, %s, %s, %s, %s, 'queued') returning id",
-            (
-                user.id,
-                assignment_id,
-                mode,
-                _psycopg_json(_model_config()),
-                rubric_version_id,
-                [row["id"] for row in prompt_versions],
-            ),
-        ).fetchone()
-        if created is None:  # INSERT ... RETURNING always yields a row; this satisfies the type checker
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Run was not created."
+        if final:
+            cur.execute(
+                "update rubric_versions set frozen_at = coalesce(frozen_at, now()) where id = %s",
+                (rubric_version_id,),
             )
-        run_id = created["id"]
+            cur.execute(
+                "update prompt_versions set frozen_at = coalesce(frozen_at, now()) where id = any(%s)",
+                (prompt_version_ids,),
+            )
 
-        enqueue_run(conn, owner_id=user.id, run_id=run_id, submission_ids=submissions)
+        group = uuid.uuid4() if repetitions > 1 else None
+        config = _model_config()
+        run_ids: list[uuid.UUID] = []
+        for index in range(1, repetitions + 1):
+            created = cur.execute(
+                "insert into runs (owner_id, assignment_id, mode, model_config, rubric_version_id, "
+                "prompt_version_ids, status, repetition_group, repetition_index, repetitions, "
+                "final_evaluation) values (%s, %s, %s, %s, %s, %s, 'queued', %s, %s, %s, %s) "
+                "returning id",
+                (
+                    user.id,
+                    assignment_id,
+                    mode,
+                    _psycopg_json(config),
+                    rubric_version_id,
+                    prompt_version_ids,
+                    group,
+                    index,
+                    repetitions,
+                    final,
+                ),
+            ).fetchone()
+            if created is None:  # INSERT ... RETURNING always yields a row; this satisfies the type checker
+                raise HTTPException(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Run was not created."
+                )
+            run_ids.append(created["id"])
+            enqueue_run(conn, owner_id=user.id, run_id=created["id"], submission_ids=submissions)
 
-    return RunOut(id=run_id, status="queued", mode=mode, jobs={"queued": len(submissions)}, needs_review=0)
+        first = _run_out(cur, run_ids[0])
+    return first.model_copy(update={"group_run_ids": run_ids})
 
 
 @router.post("/runs/{run_id}/process", response_model=RunOut)
@@ -273,7 +323,10 @@ def get_results(run_id: uuid.UUID, user: CurrentUser) -> RunResultsOut:
             "       rv.reason as review_reason, rv.reviewed_at as review_reviewed_at "
             "from submissions s "
             "join jobs j on j.submission_id = s.id and j.run_id = %s "
+            # Text-level scores only: the results table reads one level per dimension; the segment
+            # labels behind it are the detail view's and the research export's.
             "left join system_scores sc on sc.submission_id = s.id and sc.run_id = %s "
+            "and sc.segment_index is null "
             "left join evidence e on e.system_score_id = sc.id "
             "left join feedback f on f.submission_id = s.id "
             # The newest review per score, the same rule the detail view and the export use, so the preview

@@ -11,7 +11,7 @@ import io
 import uuid
 
 import openpyxl
-from conftest import INDICATORS, LEVEL_NAMES, LEVELS, QUOTE_COGNITIVE
+from conftest import INDICATORS, LEVEL_NAMES, LEVELS, QUOTE_COGNITIVE, make_admin
 
 from app import db
 from app.ingest import identity_store
@@ -46,7 +46,8 @@ def _csrf(client) -> dict:
 def _score_id(user, run_id: str, dimension: str = "cognitive") -> uuid.UUID:
     with db.tenant_tx(user) as conn:
         return conn.execute(
-            "select id from system_scores where run_id = %s and dimension = %s",
+            "select id from system_scores where run_id = %s and dimension = %s "
+            "and segment_index is null",
             (run_id, dimension),
         ).fetchone()[0]
 
@@ -273,7 +274,7 @@ def test_override_needs_a_reason_and_a_known_level(seeded):
         ).fetchall()
     # FR-11: the system score is the system's, however the lecturer judged it.
     assert score[0] == "C4"
-    assert score[1] == "Mahasiswa menilai dua kerangka kerja dan membandingkan fokusnya."
+    assert score[1].endswith("Mahasiswa menilai dua kerangka kerja dan membandingkan fokusnya.")
     assert [row[0] for row in reviews] == ["accept", "override"]
 
     detail = seeded["client"].get(f"/submissions/{seeded['submission']}").json()
@@ -343,7 +344,7 @@ def test_export_csv_and_xlsx(seeded):
     score_id = _score_id(seeded["user"], run_id, "metacognitive")
     client.post(
         f"/system_scores/{score_id}/review",
-        json={"action": "override", "new_level": "C5", "reason": "Sudah terstruktur."},
+        json={"action": "override", "new_level": "present", "reason": "Sudah terstruktur."},
         headers={"X-CSRF-Token": csrf},
     )
     client.patch(
@@ -367,12 +368,12 @@ def test_export_csv_and_xlsx(seeded):
     with db.tenant_tx(seeded["user"]) as conn:
         expected_rows = conn.execute(
             "select count(*) from system_scores sc left join evidence e on e.system_score_id = sc.id "
-            "where sc.run_id = %s",
+            "where sc.run_id = %s and sc.segment_index is null",
             (run_id,),
         ).fetchone()[0]
         spans = conn.execute(
             "select count(*) from evidence e join system_scores sc on sc.id = e.system_score_id "
-            "where sc.run_id = %s",
+            "where sc.run_id = %s and sc.segment_index is null",
             (run_id,),
         ).fetchone()[0]
     assert spans > 0
@@ -401,7 +402,7 @@ def test_export_csv_and_xlsx(seeded):
         row for row in rows[1:] if row[9] not in ("", None)
     ]
     assert [(row[9], row[10], row[11]) for row in reviewed] == [
-        ("override", "C5", "Sudah terstruktur.")
+        ("override", "present", "Sudah terstruktur.")
     ]
 
     # A score with no located quote keeps its row, with empty offsets.
@@ -466,6 +467,7 @@ def test_the_research_export_carries_both_modes_with_the_metadata_to_tell_them_a
     assignment with `mode` and the run's own snapshot as columns.
     """
     client = seeded["client"]
+    make_admin(seeded["user"])  # the research export and the baseline are admin operations (Bab III.3)
     multi = _run_batch(seeded)
     baseline = _run_batch(seeded, mode="single_agent")
     score_id = _score_id(seeded["user"], multi, "cognitive")
@@ -483,7 +485,7 @@ def test_the_research_export_carries_both_modes_with_the_metadata_to_tell_them_a
     by_mode = {
         row[header.index("mode")]: row
         for row in rows[1:]
-        if row[header.index("dimension")] == "cognitive"
+        if row[header.index("dimension")] == "cognitive" and row[header.index("segment_index")] == ""
     }
     assert set(by_mode) == {"multi_agent", "single_agent"}, by_mode
     assert by_mode["multi_agent"][header.index("run_id")] == multi
@@ -510,8 +512,9 @@ def test_the_research_export_carries_both_modes_with_the_metadata_to_tell_them_a
     assert by_mode["multi_agent"][header.index("run_status")] == "done"
 
     # The metacognitive indicators are rows too, one per indicator per mode.
+    text_level = [row for row in rows[1:] if row[header.index("segment_index")] == ""]
     indicators = [
-        row[header.index("indicator")] for row in rows[1:] if row[header.index("mode")] == "single_agent"
+        row[header.index("indicator")] for row in text_level if row[header.index("mode")] == "single_agent"
     ]
     assert sorted(indicators) == sorted([*INDICATORS, ""]), indicators
 
@@ -528,6 +531,7 @@ def test_a_baseline_run_does_not_erase_an_earlier_multi_agent_runs_feedback(seed
     mode that never writes it.
     """
     client = seeded["client"]
+    make_admin(seeded["user"])
     multi = _run_batch(seeded)
     before = client.get(f"/runs/{multi}/results").json()["submissions"][0]["feedback_text"]
     assert before, "the seeded multi-agent run must produce feedback for this test to mean anything"
@@ -542,6 +546,7 @@ def test_the_export_is_only_this_lecturers(seeded):
     """Both export families refuse another lecturer's assignment or run."""
     other = seeded["client"]
     other.post("/auth/signup", json=OTHER_LECTURER)
+    make_admin(other.get("/auth/me").json()["user"]["id"])  # even an admin reaches only their own
     assert other.get(f"/assignments/{seeded['assignment']}/research-export.csv").status_code == 404
     assert other.get(f"/assignments/{seeded['assignment']}/research-export.xlsx").status_code == 404
 

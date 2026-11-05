@@ -18,7 +18,7 @@ from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 
 from app import db
-from app.agents.models import CognitiveResult
+from app.agents.models import CognitiveResult, SegmentLevel
 from app.jobs import worker
 from app.jobs.queue import claim_jobs, enqueue_run
 
@@ -26,9 +26,14 @@ from app.jobs.queue import claim_jobs, enqueue_run
 # (see the guard test at the end of this file). The stubs therefore return a state that looks like a
 # real one: at least one agent produced a result.
 OK_COGNITIVE = CognitiveResult(
-    level="Memahami",
-    evidence_quote="kutipan contoh yang cukup panjang",
-    rationale="alasan contoh yang cukup panjang",
+    segments=[
+        SegmentLevel(
+            segment=1,
+            level="C2",
+            evidence_quote="kutipan contoh yang cukup panjang",
+            rationale="alasan contoh yang cukup panjang",
+        )
+    ]
 )
 
 ANALYSIS = "Menurut analisis saya, hasil tersebut belum membahas risiko residual, jadi perlu diuji ulang."
@@ -40,7 +45,7 @@ CALIBRATION = {
 # The codes the interim seed writes, quoted from the seed's contract; the tests only need the
 # rubric dict to be non-empty, and nothing here may become rubric content for the thesis.
 LEVELS = ["C1", "C2", "C3", "C4", "C5", "C6"]
-INDICATORS = ["elaborasi", "organisasi", "orientasi", "evaluasi"]
+INDICATORS = ["orientasi", "perencanaan", "pemantauan", "evaluasi"]
 
 
 @pytest.fixture(autouse=True)
@@ -476,20 +481,28 @@ def test_a_single_agent_run_takes_the_baseline_path_and_stores_one_trace(monkeyp
             submission_ids=lecturer["submissions"],
         )
 
-    from app.agents.models import IndicatorFinding, SingleAgentResult
+    from app.agents.models import IndicatorFinding, SegmentIndicators, SingleAgentResult
     from app.llm.client import Completion
 
     baseline = SingleAgentResult(
-        level="C4",
-        evidence_quote=ANALYSIS[:30],
-        rationale="alasan contoh yang cukup panjang",
-        findings=[
-            IndicatorFinding(
-                indicator="evaluasi",
-                present=True,
-                strength="kuat",
-                evidence_quote=ANALYSIS[-20:],
-                rationale="alasan contoh yang cukup",
+        cognitive=[
+            SegmentLevel(
+                segment=1,
+                level="C4",
+                evidence_quote=ANALYSIS[:30],
+                rationale="alasan contoh yang cukup panjang",
+            )
+        ],
+        metacognitive=[
+            SegmentIndicators(
+                segment=1,
+                indicators=[
+                    IndicatorFinding(
+                        indicator="evaluasi",
+                        evidence_quote=ANALYSIS[-20:],
+                        rationale="alasan contoh yang cukup",
+                    )
+                ],
             )
         ],
     )

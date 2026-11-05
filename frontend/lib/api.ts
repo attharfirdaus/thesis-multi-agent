@@ -55,6 +55,10 @@ const MESSAGES_ID: Record<string, string> = {
     "Kiriman ini masih menunggu atau sedang dinilai. Hentikan penilaian terlebih dahulu.",
   "Every submission in this assignment has already been graded.":
     "Semua kiriman pada tugas ini sudah dinilai.",
+  "Admin only.": "Hanya admin yang dapat membuka bagian ini.",
+  "Baseline, repeated and final-evaluation runs are admin operations.":
+    "Mode baseline, pengulangan, dan evaluasi akhir hanya dapat dijalankan admin.",
+  "A comment cannot be empty.": "Komentar tidak boleh kosong.",
 };
 
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
@@ -100,6 +104,13 @@ export type RunSummary = {
   in_flight?: RunInFlight[];
   /** `multi_agent` or `single_agent`; the list endpoint's `latest_run` omits it, the run endpoints send it. */
   mode?: string;
+  repetition_index?: number;
+  repetitions?: number;
+  /** Every run created together (Bab III.9), on the create response only. */
+  group_run_ids?: string[];
+  final_evaluation?: boolean;
+  /** The provider no longer serves the model the run snapshotted (KNF-04). */
+  model_unavailable?: boolean;
 };
 
 export type AssignmentSummary = {
@@ -139,6 +150,8 @@ export type Rubric = {
 
 export type Evidence = { quote: string; start_offset: number; end_offset: number };
 
+export type Comment = { id: string; system_score_id: string; body: string; created_at: string };
+
 export type Score = {
   id: string;
   dimension: "cognitive" | "metacognitive";
@@ -146,7 +159,13 @@ export type Score = {
   level: string;
   rationale: string | null;
   evidence: Evidence[];
+  comments?: Comment[];
 };
+
+/** One segment's label (Bab III.6): the unit behind a text-level score. */
+export type SegmentScore = Score & { segment_index: number; segment_start: number; segment_end: number };
+
+export type ExclusionReason = "calibration_source" | "author_own" | "unreadable_or_unsegmentable";
 
 export type Feedback = {
   generated_text: string | null;
@@ -177,8 +196,46 @@ export type SubmissionDetail = {
   rubric: Rubric | null;
   run: { id: string; status: string; mode: string } | null;
   scores: Score[];
+  segment_scores?: SegmentScore[];
   feedback: Feedback | null;
   reviews: Review[];
+  exclusion_reason?: ExclusionReason | null;
+};
+
+export type RubricVersion = {
+  id: string;
+  version: number;
+  levels: string[];
+  indicators: string[];
+  descriptors: Record<string, unknown>;
+  frozen_at: string | null;
+  created_at: string;
+};
+
+export type AdminRun = {
+  id: string;
+  assignment_id: string;
+  assignment_title: string;
+  mode: string;
+  status: string;
+  repetition_group: string | null;
+  repetition_index: number;
+  repetitions: number;
+  final_evaluation: boolean;
+  model_unavailable: boolean;
+  model: string | null;
+  created_at: string;
+};
+
+export type Trace = {
+  id: string;
+  submission_pseudonym: string | null;
+  agent_name: string;
+  input_ref: string | null;
+  output_json: unknown;
+  latency_ms: number | null;
+  error: string | null;
+  created_at: string;
 };
 
 export type ImportedFile = {
@@ -261,11 +318,16 @@ export const api = {
       body: JSON.stringify({ analysis_start: analysisStart }),
     }),
 
-  /** `onlyUngraded` queues jobs for submissions no run has scored; false re-grades everything (PRD §11). */
-  createRun: (assignmentId: string, mode = "multi_agent", onlyUngraded = false) =>
-    request<RunSummary>(`/assignments/${assignmentId}/runs?mode=${mode}&only_ungraded=${onlyUngraded}`, {
-      method: "POST",
-    }),
+  /**
+   * `onlyUngraded` queues jobs for submissions no run has scored; false re-grades everything (PRD §11).
+   * `repetitions` (R) and `final` are the admin's research runs (Bab III.1, III.9).
+   */
+  createRun: (assignmentId: string, mode = "multi_agent", onlyUngraded = false, repetitions = 1, final = false) =>
+    request<RunSummary>(
+      `/assignments/${assignmentId}/runs?mode=${mode}&only_ungraded=${onlyUngraded}` +
+        `&repetitions=${repetitions}&final=${final}`,
+      { method: "POST" },
+    ),
 
   processRun: (runId: string, limit: number, signal?: AbortSignal) =>
     request<RunSummary>(`/runs/${runId}/process?limit=${limit}`, { method: "POST", signal }),
@@ -284,6 +346,30 @@ export const api = {
       method: "POST",
       body: JSON.stringify(body),
     }),
+
+  commentScore: (scoreId: string, body: string) =>
+    request<Comment>(`/system_scores/${scoreId}/comments`, { method: "POST", body: JSON.stringify({ body }) }),
+
+  setExclusion: (submissionId: string, reason: ExclusionReason | null) =>
+    request<{ reason: ExclusionReason | null }>(`/submissions/${submissionId}/exclusion`, {
+      method: "PATCH",
+      body: JSON.stringify({ reason }),
+    }),
+
+  admin: {
+    users: () =>
+      request<{ id: string; email: string; name: string; role: string; created_at: string }[]>("/admin/users"),
+    rubrics: () => request<RubricVersion[]>("/admin/rubric"),
+    saveRubric: (body: { levels: string[]; indicators: string[]; descriptors: Record<string, unknown> }) =>
+      request<RubricVersion>("/admin/rubric", { method: "POST", body: JSON.stringify(body) }),
+    config: () =>
+      request<{
+        llm: Record<string, unknown>;
+        prompt_versions: { id: string; agent_name: string; version: number; frozen_at: string | null }[];
+      }>("/admin/config"),
+    runs: () => request<AdminRun[]>("/admin/runs"),
+    traces: (runId: string) => request<Trace[]>(`/admin/runs/${runId}/traces`),
+  },
 
   patchFeedback: (submissionId: string, editedText: string) =>
     request<Feedback>(`/submissions/${submissionId}/feedback`, {

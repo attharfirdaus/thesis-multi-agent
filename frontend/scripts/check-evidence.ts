@@ -20,8 +20,8 @@ import {
   flagSentences,
   levelLabel,
   modeLabel,
+  PRESENCE_OPTIONS,
   scoreLevel,
-  STRENGTH_WORDS,
   warningSentence,
   warningSentences,
 } from "../lib/labels.ts";
@@ -37,8 +37,8 @@ const text =
 const scoreWith = (id: string, start: number, end: number): Score => ({
   id,
   dimension: "metacognitive",
-  indicator: "elaborasi",
-  level: "Kuat",
+  indicator: "pemantauan",
+  level: "present",
   rationale: null,
   evidence: [{ quote: text.slice(start, end), start_offset: start, end_offset: end } as Evidence],
 });
@@ -133,32 +133,20 @@ assert.equal(flagSentences(["some_flag_from_the_future"])[0], FLAG_FALLBACK);
 assert.equal(FLAG_FALLBACK.includes("_"), false);
 assert.equal(flagSentences(["unknown_a", "unknown_b"]).length, 1);
 
-// 10. the presence words never reach the lecturer, the rubric's own words pass through, and the
-//     metacognitive strength words stay themselves even though rubric.levels does not list them
+// 10. the presence words never reach the lecturer, the rubric's own words pass through, and a strength
+//     word stored by a run before 2026-11-03 reads as present (indicators are nominal, Bab II.2.4)
 assert.equal(scoreLevel("absent"), "Tidak ditemukan");
 assert.equal(scoreLevel("present"), "Ada");
-assert.equal(scoreLevel("kuat"), "kuat");
+assert.equal(scoreLevel("kuat"), "Ada");
 assert.equal(scoreLevel("C4 - Menganalisis"), "C4 - Menganalisis");
-assert.equal(scoreLevel("kuat", ["lemah", "sedang", "kuat"]), "kuat");
-assert.equal(scoreLevel("absent", ["lemah", "sedang", "kuat"]), "Tidak ditemukan");
-assert.equal(scoreLevel("no_strength", ["lemah", "sedang", "kuat"]), "Tidak ditemukan");
+assert.equal(scoreLevel("no_strength", ["C1", "C4"]), "Tidak ditemukan");
 assert.equal(scoreLevel("C4 - Menganalisis", ["C1", "C4 - Menganalisis"]), "C4 - Menganalisis");
-// The real rubric's `levels` is the cognitive scale alone (["C1".."C6"]), so a strength word must survive
-// it: the strict fallback would otherwise turn every real metacognitive score into "Tidak ditemukan".
-assert.equal(scoreLevel("kuat", ["C1", "C2", "C3", "C4", "C5", "C6"]), "kuat");
-
-// The words themselves come from the backend, so they are read rather than remembered.
-const MODELS_SOURCE = fileURLToPath(new URL("../../backend/app/agents/models.py", import.meta.url));
-const strengthMatch = /^Strength = Literal\[([^\]]+)\]$/m.exec(readFileSync(MODELS_SOURCE, "utf8"));
-assert.notEqual(strengthMatch, null, `no Strength literal found in ${MODELS_SOURCE}`);
-const backendStrengths = (strengthMatch?.[1] ?? "")
-  .split(",")
-  .map((part) => part.trim().replace(/^"|"$/g, ""))
-  .filter(Boolean);
-assert.deepEqual([...backendStrengths].sort(), [...STRENGTH_WORDS].sort());
-for (const word of backendStrengths) {
-  assert.equal(scoreLevel(word, ["C1", "C4"]), word, `${word} must reach the lecturer as itself`);
-}
+assert.equal(scoreLevel("present", ["C1", "C2", "C3", "C4", "C5", "C6"]), "Ada");
+// The backend writes exactly these two values for an indicator; read them rather than remember them.
+const PERSIST_SOURCE = fileURLToPath(new URL("../../backend/app/agents/persist.py", import.meta.url));
+const presence = /^PRESENT, ABSENT = "([a-z]+)", "([a-z]+)"$/m.exec(readFileSync(PERSIST_SOURCE, "utf8"));
+assert.notEqual(presence, null, `no PRESENT, ABSENT constants in ${PERSIST_SOURCE}`);
+assert.deepEqual([presence?.[1], presence?.[2]], PRESENCE_OPTIONS);
 
 // 10c. the two run modes read as their names, and no mode value leaks as an identifier
 assert.equal(modeLabel("multi_agent"), "Multi-agen");

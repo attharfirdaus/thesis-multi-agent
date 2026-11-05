@@ -65,8 +65,8 @@ def test_one_batch_evaluates_end_to_end_with_evidence(seeded):
 
     indicators = {s["indicator"]: s for s in submission["scores"] if s["dimension"] == "metacognitive"}
     assert set(indicators) == set(INDICATORS)
-    assert indicators["elaborasi"]["level"] == "kuat"
-    assert indicators["organisasi"]["level"] == "absent"
+    assert indicators["pemantauan"]["level"] == "present"
+    assert indicators["orientasi"]["level"] == "absent"
 
     # The decisive check: offsets must slice the quote out of the *stored* text, not out of something
     # that only existed while the graph ran.
@@ -78,7 +78,7 @@ def test_one_batch_evaluates_end_to_end_with_evidence(seeded):
     assert span["quote"] == QUOTE_COGNITIVE
     assert analysis[span["start_offset"] : span["end_offset"]] == span["quote"]
 
-    metacog_span = indicators["elaborasi"]["evidence"][0]
+    metacog_span = indicators["pemantauan"]["evidence"][0]
     assert analysis[metacog_span["start_offset"] : metacog_span["end_offset"]] == metacog_span["quote"]
 
     # PRD §10 keeps a latency per trace. It was null in every row until the state carried the client's
@@ -142,10 +142,10 @@ class _CognitiveFails:
     def __init__(self, inner) -> None:
         self.inner = inner
 
-    def complete_json(self, *, system, user, schema, temperature=None, seed=None):
+    def complete_json(self, *, system, user, schema, **kwargs):
         if schema is CognitiveResult:
             raise RuntimeError("provider unreachable")
-        return self.inner.complete_json(system=system, user=user, schema=schema)
+        return self.inner.complete_json(system=system, user=user, schema=schema, **kwargs)
 
 
 def _score_the_batch(seeded) -> str:

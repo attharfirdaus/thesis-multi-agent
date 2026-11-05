@@ -14,7 +14,13 @@ import pytest
 
 from app.agents.models import CognitiveResult
 from app.config import get_settings
-from app.llm.client import Completion, ProviderClient, ProviderError, ProviderNotConfigured
+from app.llm.client import (
+    Completion,
+    ModelUnavailable,
+    ProviderClient,
+    ProviderError,
+    ProviderNotConfigured,
+)
 
 CONFIGURED = {
     "LLM_BASE_URL": "https://provider.test/v1",
@@ -24,9 +30,14 @@ CONFIGURED = {
 SYSTEM = "You are the cognitive agent."
 USER = "Aktivitas ini menunjukkan peningkatan hasil belajar."
 PAYLOAD = {
-    "level": "C4",
-    "evidence_quote": "Hasil belajar siswa meningkat setelah tindakan.",
-    "rationale": "Analisis membandingkan kondisi awal dengan kondisi akhir.",
+    "segments": [
+        {
+            "segment": 1,
+            "level": "C4",
+            "evidence_quote": "Hasil belajar siswa meningkat setelah tindakan.",
+            "rationale": "Analisis membandingkan kondisi awal dengan kondisi akhir.",
+        }
+    ]
 }
 
 
@@ -141,7 +152,7 @@ def test_unreachable_provider_is_retried_then_raises(monkeypatch):
 
 def test_schema_violation_exhausts_the_attempts_and_raises(monkeypatch):
     configure(monkeypatch, LLM_MAX_ATTEMPTS="2")
-    provider, calls = stub([json.dumps({**PAYLOAD, "evidence_quote": "pendek"})])
+    provider, calls = stub([json.dumps({"segments": []})])
 
     with pytest.raises(ProviderError) as raised:
         provider.complete_json(system=SYSTEM, user=USER, schema=CognitiveResult)
@@ -173,3 +184,34 @@ def test_incomplete_configuration_raises_before_any_call(monkeypatch, missing):
         provider.complete_json(system=SYSTEM, user=USER, schema=CognitiveResult)
 
     assert calls == []
+
+
+def test_a_caller_check_failure_is_retried_like_a_schema_violation(monkeypatch):
+    """A schema-valid answer the caller rejects (a level outside the rubric, a missing segment) costs
+    one attempt and is asked again, never stored."""
+    configure(monkeypatch)
+    wrong = json.dumps({"segments": [{**PAYLOAD["segments"][0], "level": "C9"}]})
+    provider, calls = stub([wrong, json.dumps(PAYLOAD)])
+
+    def check(parsed):
+        if parsed.segments[0].level not in ("C1", "C2", "C3", "C4", "C5", "C6"):
+            raise ValueError("level not in rubric")
+
+    completion = provider.complete_json(system=SYSTEM, user=USER, schema=CognitiveResult, check=check)
+
+    assert completion.attempts == 2 and len(calls) == 2
+
+
+def test_a_model_the_provider_no_longer_serves_is_not_retried(monkeypatch):
+    """KNF-04: a gone model stops at once with its own error, so the run is flagged, not retried."""
+    configure(monkeypatch)
+    calls: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(request)
+        return httpx.Response(404, json={"error": "model not found: test-model"})
+
+    provider = ProviderClient(http=httpx.Client(transport=httpx.MockTransport(handler)))
+    with pytest.raises(ModelUnavailable):
+        provider.complete_json(system=SYSTEM, user=USER, schema=CognitiveResult)
+    assert len(calls) == 1

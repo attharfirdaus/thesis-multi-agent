@@ -4,7 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
 
-import { AppShell } from "@/components/app-shell";
+import { AdminOnly, AppShell } from "@/components/app-shell";
 import { StatusBadge, runStatus, segmentationStatus } from "@/components/status-badge";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
@@ -503,6 +503,8 @@ export default function TugasPage() {
               {/* The scope decides what the primary button spends quota on, so it sits directly above it. */}
               {unfinishedRunId === null && !driving ? (
                 <div className="flex flex-col gap-4 sm:flex-row sm:gap-10">
+                  {/* The baseline is the researcher's comparison run (Bab III.3, KF-11): admin only. */}
+                  <AdminOnly>
                   <fieldset className="flex flex-col gap-2">
                     <legend className="text-sm font-medium">Mode penilaian</legend>
                     <div className="flex items-start gap-2">
@@ -536,6 +538,7 @@ export default function TugasPage() {
                       pada penelitian, bukan sebagai cara menilai yang lebih hemat.
                     </p>
                   </fieldset>
+                  </AdminOnly>
 
                   <fieldset className="flex flex-col gap-2">
                     <legend className="text-sm font-medium">Kiriman yang dinilai</legend>

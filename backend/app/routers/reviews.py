@@ -15,13 +15,17 @@ from app import db
 from app.ingest.identity_store import read as read_identity
 from app.routers.auth import CurrentUser
 from app.schemas import (
+    CommentIn,
+    CommentOut,
     EvidenceOut,
+    ExclusionPatch,
     FeedbackOut,
     FeedbackPatch,
     ReviewIn,
     ReviewOut,
     RubricOut,
     RunRefOut,
+    SegmentScoreOut,
     SubmissionDetailOut,
     SubmissionScoreOut,
 )
@@ -40,7 +44,7 @@ def get_submission(submission_id: uuid.UUID, user: CurrentUser) -> SubmissionDet
     with db.tenant_tx(user.id) as conn, conn.cursor(row_factory=dict_row) as cur:
         submission = cur.execute(
             "select id, assignment_id, pseudonym, segmentation_status, import_warnings, "
-            "       review_flags, created_at, "
+            "       review_flags, created_at, exclusion_reason, "
             "       coalesce(ai_output_text, '') as ai_output_text, "
             "       coalesce(student_analysis_text, '') as student_analysis_text "
             "from submissions where id = %s",
@@ -58,6 +62,7 @@ def get_submission(submission_id: uuid.UUID, user: CurrentUser) -> SubmissionDet
         ).fetchone()
 
         scores: list[SubmissionScoreOut] = []
+        segment_scores: list[SegmentScoreOut] = []
         rubric = None
         reviews: list[ReviewOut] = []
         if run is not None:
@@ -75,25 +80,46 @@ def get_submission(submission_id: uuid.UUID, user: CurrentUser) -> SubmissionDet
                 )
 
             by_id: dict[uuid.UUID, SubmissionScoreOut] = {}
+            by_segment_id: dict[uuid.UUID, SegmentScoreOut] = {}
             for row in cur.execute(
                 "select sc.id, sc.dimension, sc.indicator, sc.level, sc.rationale, "
+                "       sc.segment_index, sc.segment_start, sc.segment_end, "
                 "       e.quote, e.start_offset, e.end_offset "
                 "from system_scores sc left join evidence e on e.system_score_id = sc.id "
                 "where sc.run_id = %s and sc.submission_id = %s "
-                "order by sc.dimension, sc.indicator, sc.id",
+                "order by sc.segment_index nulls first, sc.dimension, sc.indicator, sc.id",
                 (run["id"], submission_id),
             ).fetchall():
-                score = by_id.get(row["id"])
-                if score is None:
-                    score = SubmissionScoreOut(
-                        id=row["id"],
-                        dimension=row["dimension"],
-                        indicator=row["indicator"],
-                        level=row["level"],
-                        rationale=row["rationale"],
-                    )
-                    by_id[row["id"]] = score
-                    scores.append(score)
+                # Text-level scores are what the lecturer judges; segment labels show what they rest on
+                # (Bab III.6). Both carry their own evidence.
+                score: SubmissionScoreOut | SegmentScoreOut | None
+                if row["segment_index"] is None:
+                    score = by_id.get(row["id"])
+                    if score is None:
+                        score = SubmissionScoreOut(
+                            id=row["id"],
+                            dimension=row["dimension"],
+                            indicator=row["indicator"],
+                            level=row["level"],
+                            rationale=row["rationale"],
+                        )
+                        by_id[row["id"]] = score
+                        scores.append(score)
+                else:
+                    score = by_segment_id.get(row["id"])
+                    if score is None:
+                        score = SegmentScoreOut(
+                            id=row["id"],
+                            segment_index=row["segment_index"],
+                            segment_start=row["segment_start"],
+                            segment_end=row["segment_end"],
+                            dimension=row["dimension"],
+                            indicator=row["indicator"],
+                            level=row["level"],
+                            rationale=row["rationale"],
+                        )
+                        by_segment_id[row["id"]] = score
+                        segment_scores.append(score)
                 if row["quote"] is not None:  # a left join still yields one row for a scoreless span
                     score.evidence.append(
                         EvidenceOut(
@@ -102,6 +128,13 @@ def get_submission(submission_id: uuid.UUID, user: CurrentUser) -> SubmissionDet
                             end_offset=row["end_offset"],
                         )
                     )
+
+            for row in cur.execute(
+                "select id, system_score_id, body, created_at from score_comments "
+                "where system_score_id = any(%s) order by created_at",
+                (list(by_id),),
+            ).fetchall():
+                by_id[row["system_score_id"]].comments.append(CommentOut(**row))
 
             # The newest review per score. A lecturer who changes their mind records a second row —
             # FR-11 keeps the history — and only the latest one is the state of the score now.
@@ -128,6 +161,7 @@ def get_submission(submission_id: uuid.UUID, user: CurrentUser) -> SubmissionDet
         if run is None
         else RunRefOut(id=run["id"], status=run["status"], mode=run["mode"]),
         scores=scores,
+        segment_scores=segment_scores,
         feedback=None if feedback is None else FeedbackOut(**feedback),
         reviews=reviews,
     )
@@ -144,7 +178,7 @@ def review_score(
     require_csrf(request)
     with db.tenant_tx(user.id) as conn, conn.cursor(row_factory=dict_row) as cur:
         score = cur.execute(
-            "select sc.id, r.rubric_version_id from system_scores sc "
+            "select sc.id, sc.dimension, r.rubric_version_id from system_scores sc "
             "join runs r on r.id = sc.run_id where sc.id = %s",
             (score_id,),
         ).fetchone()
@@ -162,12 +196,16 @@ def review_score(
             rubric = cur.execute(
                 "select levels from rubric_versions where id = %s", (score["rubric_version_id"],)
             ).fetchone()
-            # The level has to be one the run's own rubric offered. An override is the lecturer
-            # disagreeing with the score, not with the scale.
-            if rubric is None or payload.new_level not in list(rubric["levels"] or []):
+            # The level has to be one the run's own scale offered. An override is the lecturer
+            # disagreeing with the score, not with the scale: a Bloom level for the cognitive
+            # dimension, presence or absence for a (nominal) metacognitive indicator.
+            allowed = (
+                list(rubric["levels"] or []) if rubric is not None else []
+            ) if score["dimension"] == "cognitive" else ["present", "absent"]
+            if payload.new_level not in allowed:
                 raise HTTPException(
                     status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-                    detail="new_level must be one of the rubric's levels.",
+                    detail=f"new_level must be one of {allowed}.",
                 )
             new_level = payload.new_level
 
@@ -206,3 +244,47 @@ def edit_feedback(
             )
 
     return FeedbackOut(**updated)
+
+
+@router.post(
+    "/system_scores/{score_id}/comments", response_model=CommentOut, status_code=status.HTTP_201_CREATED
+)
+def comment_score(
+    score_id: uuid.UUID, payload: CommentIn, request: Request, user: CurrentUser
+) -> CommentOut:
+    """KF-08: a lecturer's comment on a score. It judges nothing, so it never changes the score's
+    review state and is stored apart from `lecturer_reviews`."""
+    require_csrf(request)
+    body = payload.body.strip()
+    if not body:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail="A comment cannot be empty."
+        )
+    with db.tenant_tx(user.id) as conn, conn.cursor(row_factory=dict_row) as cur:
+        if cur.execute("select 1 from system_scores where id = %s", (score_id,)).fetchone() is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Score not found.")
+        created = cur.execute(
+            "insert into score_comments (owner_id, system_score_id, body) values (%s, %s, %s) "
+            "returning id, system_score_id, body, created_at",
+            (user.id, score_id, body),
+        ).fetchone()
+    if created is None:  # INSERT ... RETURNING always yields a row; this satisfies the type checker
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Not saved.")
+    return CommentOut(**created)
+
+
+@router.patch("/submissions/{submission_id}/exclusion", response_model=ExclusionPatch)
+def set_exclusion(
+    submission_id: uuid.UUID, payload: ExclusionPatch, request: Request, user: CurrentUser
+) -> ExclusionPatch:
+    """Tabel III.4: mark a submission as outside the evaluation set, with the reason, or put it back.
+    The submission is still evaluated in the app; the research export carries the flag."""
+    require_csrf(request)
+    with db.tenant_tx(user.id) as conn:
+        updated = conn.execute(
+            "update submissions set exclusion_reason = %s where id = %s returning exclusion_reason",
+            (payload.reason, submission_id),
+        ).fetchone()
+    if updated is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Submission not found.")
+    return ExclusionPatch(reason=updated[0])

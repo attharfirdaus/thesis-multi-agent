@@ -57,6 +57,8 @@ from app.agents.models import (  # noqa: E402
     CognitiveResult,
     IndicatorFinding,
     MetacognitiveResult,
+    SegmentIndicators,
+    SegmentLevel,
     SingleAgentResult,
     SynthesisResult,
 )
@@ -67,7 +69,7 @@ from scripts.seed_rubric import LEVEL_NAMES  # noqa: E402
 from scripts.setup_checkpointer import setup as setup_checkpointer  # noqa: E402
 
 TENANT_TABLES = [
-    "feedback", "lecturer_reviews", "evidence", "system_scores", "jobs", "agent_traces",
+    "score_comments", "feedback", "lecturer_reviews", "evidence", "system_scores", "jobs", "agent_traces",
     "runs", "submissions", "prompt_versions", "assignments",
     "rubric_versions", "sessions", "users",
 ]
@@ -93,6 +95,13 @@ def clean_db():
     yield
 
 
+def make_admin(user_id) -> None:
+    """Promote a user to admin. There is no endpoint for it on purpose: roles are set by the owner of
+    the database, so the tests do it the same way."""
+    with psycopg.connect(os.environ["MIGRATION_DATABASE_URL"], autocommit=True) as conn:
+        conn.execute("update users set role = 'admin' where id = %s", (str(user_id),))
+
+
 @pytest.fixture
 def client():
     with TestClient(app) as c:
@@ -112,97 +121,75 @@ ANALYSIS = (
 )
 
 LEVELS = ["C1", "C2", "C3", "C4", "C5", "C6"]
-INDICATORS = ["elaborasi", "organisasi", "orientasi", "evaluasi"]
+INDICATORS = ["orientasi", "perencanaan", "pemantauan", "evaluasi"]
+
+# The analysis splits into three sentence segments (Bab III.6); QUOTE_METACOGNITIVE is in the first,
+# QUOTE_COGNITIVE in the second. The stub labels them C2, C4, C3, so the text-level level is C4.
+COGNITIVE_SEGMENTS = [
+    SegmentLevel(
+        segment=1, level="C2", evidence_quote=QUOTE_METACOGNITIVE, rationale="Membandingkan dua kerangka."
+    ),
+    SegmentLevel(
+        segment=2,
+        level="C4",
+        evidence_quote=QUOTE_COGNITIVE,
+        rationale="Mahasiswa menilai dua kerangka kerja dan membandingkan fokusnya.",
+    ),
+    SegmentLevel(
+        segment=3, level="C3", evidence_quote="keduanya saling melengkapi", rationale="Menerapkan kesimpulan."
+    ),
+]
+METACOGNITIVE_SEGMENTS = [
+    SegmentIndicators(
+        segment=1,
+        indicators=[
+            IndicatorFinding(
+                indicator="pemantauan",
+                evidence_quote=QUOTE_METACOGNITIVE,
+                rationale="Memeriksa pemahaman dengan membandingkan dua kerangka kerja.",
+            )
+        ],
+    ),
+    SegmentIndicators(
+        segment=2,
+        indicators=[
+            IndicatorFinding(
+                indicator="evaluasi",
+                evidence_quote=QUOTE_COGNITIVE,
+                rationale="Memberi penilaian tentang keterbatasan masing-masing.",
+            )
+        ],
+    ),
+    SegmentIndicators(segment=3, indicators=[]),
+]
 
 
 class StubClient:
-    """Returns one canned answer per schema. Counts calls so a test can prove both agents ran."""
+    """Returns one canned answer per schema. Counts calls so a test can prove both agents ran, and
+    keeps each call's user turn so a test can prove what an agent was shown."""
 
     def __init__(self) -> None:
         self.calls: list[type] = []
+        self.users: list[str] = []
 
-    def complete_json(self, *, system, user, schema, temperature=None, seed=None):
+    def complete_json(self, *, system, user, schema, temperature=None, seed=None, check=None):
         self.calls.append(schema)
+        self.users.append(user)
         payload = {
-            CognitiveResult: CognitiveResult(
-                level="C4",
-                evidence_quote=QUOTE_COGNITIVE,
-                rationale="Mahasiswa menilai dua kerangka kerja dan membandingkan fokusnya.",
-            ),
-            MetacognitiveResult: MetacognitiveResult(
-                findings=[
-                    IndicatorFinding(
-                        indicator="elaborasi",
-                        present=True,
-                        strength="kuat",
-                        evidence_quote=QUOTE_METACOGNITIVE,
-                        rationale="Memperluas dengan membandingkan dua kerangka kerja.",
-                    ),
-                    IndicatorFinding(
-                        indicator="evaluasi",
-                        present=True,
-                        strength="sedang",
-                        evidence_quote=QUOTE_COGNITIVE,
-                        rationale="Memberi penilaian tentang keterbatasan masing-masing.",
-                    ),
-                    IndicatorFinding(
-                        indicator="organisasi",
-                        present=False,
-                        strength=None,
-                        evidence_quote="",
-                        rationale="Tidak terlihat penataan ulang materi.",
-                    ),
-                    IndicatorFinding(
-                        indicator="orientasi",
-                        present=False,
-                        strength=None,
-                        evidence_quote="",
-                        rationale="Tidak ada perumusan tujuan belajar.",
-                    ),
-                ]
-            ),
+            CognitiveResult: CognitiveResult(segments=COGNITIVE_SEGMENTS),
+            MetacognitiveResult: MetacognitiveResult(segments=METACOGNITIVE_SEGMENTS),
             SynthesisResult: SynthesisResult(
                 rationale="Analisis menunjukkan perbandingan yang sadar antara dua kerangka kerja.",
                 feedback_text="Perbandingan Anda sudah baik; tambahkan contoh penerapan agar lebih kuat.",
             ),
-            # FR-15's baseline: the same cognitive level and metacognitive findings as above, in
-            # the one-call shape, so a test can run both modes over the same stubbed answer.
+            # FR-15's baseline: the same labels as above, in the one-call shape, so a test can run both
+            # modes over the same stubbed answer.
             SingleAgentResult: SingleAgentResult(
-                level="C4",
-                evidence_quote=QUOTE_COGNITIVE,
-                rationale="Mahasiswa menilai dua kerangka kerja dan membandingkan fokusnya.",
-                findings=[
-                    IndicatorFinding(
-                        indicator="elaborasi",
-                        present=True,
-                        strength="kuat",
-                        evidence_quote=QUOTE_METACOGNITIVE,
-                        rationale="Memperluas dengan membandingkan dua kerangka kerja.",
-                    ),
-                    IndicatorFinding(
-                        indicator="evaluasi",
-                        present=True,
-                        strength="sedang",
-                        evidence_quote=QUOTE_COGNITIVE,
-                        rationale="Memberi penilaian tentang keterbatasan masing-masing.",
-                    ),
-                    IndicatorFinding(
-                        indicator="organisasi",
-                        present=False,
-                        strength=None,
-                        evidence_quote="",
-                        rationale="Tidak terlihat penataan ulang materi.",
-                    ),
-                    IndicatorFinding(
-                        indicator="orientasi",
-                        present=False,
-                        strength=None,
-                        evidence_quote="",
-                        rationale="Tidak ada perumusan tujuan belajar.",
-                    ),
-                ],
+                cognitive=COGNITIVE_SEGMENTS, metacognitive=METACOGNITIVE_SEGMENTS
             ),
         }[schema]
+        if check is not None:
+            check(payload)
         return Completion(parsed=payload, raw=json.dumps(payload.model_dump()), latency_ms=7, attempts=1)
 
 
@@ -240,7 +227,7 @@ def seeded(client, monkeypatch):
             "values (%s, 1, %s, %s, %s, %s) returning id",
             (
                 user,
-                json.dumps({"cognitive": "Bloom", "metacognitive": "SRL G1"}),
+                json.dumps({"cognitive": "Bloom", "metacognitive": "Indikator metakognitif"}),
                 json.dumps(LEVELS),
                 json.dumps(INDICATORS),
                 json.dumps({"levels": LEVEL_NAMES, "indicators": {}, "interim": True}),

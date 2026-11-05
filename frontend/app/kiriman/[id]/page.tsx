@@ -4,16 +4,23 @@ import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
 
-import { AppShell } from "@/components/app-shell";
+import { AdminOnly, AppShell } from "@/components/app-shell";
 import { StatusBadge, runStatus, segmentationStatus } from "@/components/status-badge";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { api, type Score, type SubmissionDetail } from "@/lib/api";
+import { api, type ExclusionReason, type Score, type SubmissionDetail } from "@/lib/api";
 import { buildSegments, combinedDocument } from "@/lib/evidence";
-import { flagSentences, levelLabel, scoreLevel, submissionLabel } from "@/lib/labels";
+import {
+  EXCLUSION_LABELS,
+  PRESENCE_OPTIONS,
+  flagSentences,
+  levelLabel,
+  scoreLevel,
+  submissionLabel,
+} from "@/lib/labels";
 
 const DIMENSION_LABEL: Record<Score["dimension"], string> = {
   cognitive: "Tingkat Kognitif",
@@ -35,6 +42,8 @@ export default function KirimanPage() {
   const [savingFeedback, setSavingFeedback] = useState(false);
   const [boundary, setBoundary] = useState<number | null>(null);
   const [savingSeg, setSavingSeg] = useState(false);
+  const [commentDrafts, setCommentDrafts] = useState<Record<string, string>>({});
+  const [savingComment, setSavingComment] = useState(false);
 
   const load = useCallback(
     () =>
@@ -92,6 +101,36 @@ export default function KirimanPage() {
     }
   }
 
+  async function onComment(scoreId: string) {
+    const body = (commentDrafts[scoreId] ?? "").trim();
+    if (!body) return;
+    setSavingComment(true);
+    setError(null);
+    setNote(null);
+    try {
+      await api.commentScore(scoreId, body);
+      setCommentDrafts((drafts) => ({ ...drafts, [scoreId]: "" }));
+      setNote("Komentar tersimpan.");
+      await load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Gagal menyimpan komentar.");
+    } finally {
+      setSavingComment(false);
+    }
+  }
+
+  async function onExclusion(reason: ExclusionReason | null) {
+    setError(null);
+    setNote(null);
+    try {
+      await api.setExclusion(id, reason);
+      setNote(reason ? "Kiriman ditandai di luar data evaluasi." : "Kiriman dikembalikan ke data evaluasi.");
+      await load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Gagal menyimpan status evaluasi.");
+    }
+  }
+
   async function onSaveFeedback(event: React.FormEvent) {
     event.preventDefault();
     if (feedbackDraft === null) return;
@@ -129,6 +168,8 @@ export default function KirimanPage() {
   }
 
   function scoreCard(score: Score) {
+    // An indicator is nominal (Bab II.2.4): the lecturer corrects presence, not a Bloom level.
+    const options = score.dimension === "metacognitive" ? PRESENCE_OPTIONS : levels;
     const review = [...(detail?.reviews ?? [])].reverse().find((item) => item.system_score_id === score.id);
     return (
       <Card key={score.id}>
@@ -195,9 +236,9 @@ export default function KirimanPage() {
                   onChange={(event) => setDraft({ ...draft, level: event.target.value })}
                   className="h-8 w-full rounded-lg border border-input bg-background px-2 text-base outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
                 >
-                  {levels.map((level) => (
+                  {options.map((level) => (
                     <option key={level} value={level}>
-                      {levelLabel(level, levelNames)}
+                      {levelLabel(scoreLevel(level, levels), levelNames)}
                     </option>
                   ))}
                 </select>
@@ -228,13 +269,46 @@ export default function KirimanPage() {
               <Button
                 variant="outline"
                 size="sm"
-                disabled={savingReview || levels.length === 0}
-                onClick={() => setDraft({ scoreId: score.id, level: levels[0] ?? "", reason: "" })}
+                disabled={savingReview || options.length === 0}
+                onClick={() => setDraft({ scoreId: score.id, level: options[0] ?? "", reason: "" })}
               >
                 Ubah
               </Button>
             </div>
           )}
+
+          <div className="flex flex-col gap-2 border-t pt-3">
+            {(score.comments ?? []).map((comment) => (
+              <p key={comment.id} className="text-sm text-muted-foreground">
+                Komentar: {comment.body}
+              </p>
+            ))}
+            <form
+              onSubmit={(event) => {
+                event.preventDefault();
+                void onComment(score.id);
+              }}
+              className="flex gap-2"
+            >
+              <Label htmlFor={`comment-${score.id}`} className="sr-only">
+                Komentar untuk nilai ini
+              </Label>
+              <Input
+                id={`comment-${score.id}`}
+                placeholder="Tulis komentar…"
+                value={commentDrafts[score.id] ?? ""}
+                onChange={(event) => setCommentDrafts((drafts) => ({ ...drafts, [score.id]: event.target.value }))}
+              />
+              <Button
+                type="submit"
+                variant="outline"
+                size="sm"
+                disabled={savingComment || !(commentDrafts[score.id] ?? "").trim()}
+              >
+                Kirim
+              </Button>
+            </form>
+          </div>
         </CardContent>
       </Card>
     );
@@ -333,6 +407,77 @@ export default function KirimanPage() {
               ) : (
                 detail.scores.map(scoreCard)
               )}
+
+              {detail.segment_scores?.length ? (
+                <Card>
+                  <CardHeader>
+                    <CardTitle>Penilaian per segmen</CardTitle>
+                    <CardDescription>
+                      Analisis dinilai per kalimat. Tingkat kognitif teks adalah tingkat tertinggi dari segmen,
+                      dan indikator teks adalah indikator yang muncul di segmen mana pun.
+                    </CardDescription>
+                  </CardHeader>
+                  <CardContent className="overflow-x-auto">
+                    <table className="w-full text-left text-sm">
+                      <thead>
+                        <tr className="border-b">
+                          <th className="py-2 pr-3 font-medium">No.</th>
+                          <th className="py-2 pr-3 font-medium">Segmen</th>
+                          <th className="py-2 pr-3 font-medium">Tingkat Kognitif</th>
+                          <th className="py-2 font-medium">Indikator Metakognitif</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {[...new Set(detail.segment_scores.map((s) => s.segment_index))].map((index) => {
+                          const rows = detail.segment_scores!.filter((s) => s.segment_index === index);
+                          const cognitive = rows.find((s) => s.dimension === "cognitive");
+                          const present = rows
+                            .filter((s) => s.dimension === "metacognitive" && s.level !== "absent")
+                            .map((s) => s.indicator);
+                          const unit = rows[0];
+                          return (
+                            <tr key={index} className="border-b align-top">
+                              <td className="py-2 pr-3">{index}</td>
+                              <td className="py-2 pr-3">{text.slice(unit.segment_start, unit.segment_end)}</td>
+                              <td className="py-2 pr-3 whitespace-nowrap">
+                                {cognitive ? levelLabel(scoreLevel(cognitive.level, levels), levelNames) : "—"}
+                              </td>
+                              <td className="py-2">{present.length ? present.join(", ") : "—"}</td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </CardContent>
+                </Card>
+              ) : null}
+
+              <AdminOnly>
+                <Card>
+                  <CardHeader>
+                    <CardTitle>Data evaluasi penelitian</CardTitle>
+                    <CardDescription>
+                      Kiriman yang dikeluarkan tetap dinilai, tetapi ditandai pada ekspor riset.
+                    </CardDescription>
+                  </CardHeader>
+                  <CardContent className="flex flex-col gap-2">
+                    <Label htmlFor="exclusion">Status</Label>
+                    <select
+                      id="exclusion"
+                      value={detail.exclusion_reason ?? ""}
+                      onChange={(event) => void onExclusion((event.target.value || null) as ExclusionReason | null)}
+                      className="h-8 w-full rounded-lg border border-input bg-background px-2 text-base outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
+                    >
+                      <option value="">Termasuk data evaluasi</option>
+                      {Object.entries(EXCLUSION_LABELS).map(([value, label]) => (
+                        <option key={value} value={value}>
+                          Dikeluarkan: {label}
+                        </option>
+                      ))}
+                    </select>
+                  </CardContent>
+                </Card>
+              </AdminOnly>
 
               <Card>
                 <CardHeader>
