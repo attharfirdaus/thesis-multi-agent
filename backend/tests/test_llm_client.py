@@ -166,7 +166,7 @@ def test_unreachable_provider_is_retried_then_raises(monkeypatch):
     with pytest.raises(ProviderError, match="503"):
         provider.complete_json(system=SYSTEM, user=USER, schema=CognitiveResult)
 
-    assert len(calls) == 3  # LLM_MAX_ATTEMPTS
+    assert len(calls) == 2  # LLM_MAX_ATTEMPTS: one retry (Bab III.4), timeouts and 5xx included
 
 
 def test_schema_violation_exhausts_the_attempts_and_raises(monkeypatch):

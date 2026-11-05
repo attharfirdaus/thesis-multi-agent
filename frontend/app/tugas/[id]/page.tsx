@@ -364,6 +364,10 @@ export default function TugasPage() {
               <p className="text-muted-foreground">
                 {detail.course} · {detail.submission_count} kiriman
               </p>
+              {/* KF-02: read-only — a new assignment takes the newest rubric version automatically. */}
+              <p className="text-sm text-muted-foreground">
+                Versi rubrik: {detail.rubric_version ?? "belum ada"}
+              </p>
             </div>
             <Link href={`/tugas/${id}/hasil`} className="underline underline-offset-4 hover:text-foreground">
               Lihat hasil penilaian

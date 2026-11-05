@@ -196,6 +196,9 @@ class SubmissionSummaryOut(SubmissionOut):
 
 
 class AssignmentDetailOut(AssignmentSummaryOut):
+    #: KF-02: the rubric version the assignment is pinned to — the owner's newest at creation, chosen
+    #: automatically and shown read-only (Atthar, 2026-11-05). None for an assignment without one.
+    rubric_version: int | None = None
     submissions: list[SubmissionSummaryOut] = Field(default_factory=list)
     runs: list[RunOut] = Field(default_factory=list)
 

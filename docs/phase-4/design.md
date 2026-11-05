@@ -68,7 +68,8 @@ privacy claim checkable rather than aspirational:
   warned about (PRD §11);
 - the answer is validated against the caller's Pydantic schema, so a hallucinated field is a retry and
   not a wrong score;
-- up to `LLM_MAX_ATTEMPTS` (default 3) attempts, then the error is raised and the *job* owns the retry;
+- up to `LLM_MAX_ATTEMPTS` (default 2 since 2026-11-05: one retry, Bab III.4; timeouts and 5xx count
+  too) attempts, then the error is raised and the *job* owns the retry;
 - `temperature` and `seed` come from configuration and are part of the run's `model_config` snapshot;
 - no model name, no account id and no provider URL appears in code — they are `LLM_BASE_URL`,
   `LLM_MODEL`, `LLM_API_KEY` (PRD §11).

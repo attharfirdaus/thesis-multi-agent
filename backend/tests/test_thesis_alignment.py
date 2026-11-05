@@ -380,3 +380,9 @@ def test_the_rater_sheet_has_context_label_columns_and_a_per_rater_order(scored_
     assert row["analysis_text"] and row["segment_text"] in row["analysis_text"]
     expected = {"label_kognitif", "tidak_dapat_dinilai", *(f"indikator_{name}" for name in INDICATORS)}
     assert expected <= set(row)
+
+
+def test_the_assignment_shows_its_pinned_rubric_version(seeded):
+    """KF-02 (Atthar, 2026-11-05): the version is chosen automatically and shown read-only."""
+    detail = seeded["client"].get(f"/assignments/{seeded['assignment']}").json()
+    assert detail["rubric_version"] == 1

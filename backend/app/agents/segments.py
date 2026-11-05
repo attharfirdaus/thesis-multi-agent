@@ -21,9 +21,9 @@ from pydantic import BaseModel, Field
 # A sentence ends at ., ! or ? followed by whitespace, or at a blank line (a paragraph or list break). A
 # single line break does not end one: extracted PDF text wraps lines in the middle of sentences.
 _BOUNDARY = re.compile(r"(?<=[.!?])\s+|\n\s*\n")
-# A connector sentence: too short to state anything on its own, or one that announces what follows.
-# ponytail: word-count + trailing-colon heuristic; replace with the raters' finalised segmentation rule
-# if the annotation guideline defines connectors differently.
+# A connector sentence (Bab III.6): fewer than 4 words, or ending in ":" because it announces what
+# follows. This is the final rule (Atthar, 2026-11-05); the annotation guideline and Bab IV state it, so
+# the raters and the system split the same way. Changing it changes the thesis's unit of assessment.
 _MIN_WORDS = 4
 
 

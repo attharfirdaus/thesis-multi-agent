@@ -47,9 +47,11 @@ class Settings(BaseSettings):
     # constants. `seed` is best-effort on every free route evaluated, hence optional.
     llm_temperature: float = Field(default=0, alias="LLM_TEMPERATURE")
     llm_seed: int | None = Field(default=None, alias="LLM_SEED")
-    # Invalid JSON and schema violations are retried, then the agent is marked failed (PRD §6), so
-    # this is the total number of attempts, not the number of retries.
-    llm_max_attempts: int = Field(default=3, alias="LLM_MAX_ATTEMPTS")
+    # The total number of attempts per agent call, not the number of retries. Bab III.4: a first
+    # failure is repeated once before the agent is marked failed, so 2 = one retry (Atthar,
+    # 2026-11-05). It covers every failure the client retries — invalid JSON, a schema or label
+    # violation, a timeout, a 5xx — not only the schema case the thesis names.
+    llm_max_attempts: int = Field(default=2, alias="LLM_MAX_ATTEMPTS")
     llm_timeout_seconds: float = Field(default=120, alias="LLM_TIMEOUT_SECONDS")
     # A hard ceiling on generated tokens. Without one, generation is unbounded: asked to score a
     # 9k-character analysis on 2026-10-16, the model emitted for more than 300 seconds and produced

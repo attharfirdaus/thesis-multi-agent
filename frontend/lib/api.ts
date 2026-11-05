@@ -136,6 +136,8 @@ export type SubmissionSummary = {
 };
 
 export type AssignmentDetail = AssignmentSummary & {
+  /** KF-02: the rubric version the assignment is pinned to, chosen automatically; null when it has none. */
+  rubric_version?: number | null;
   submissions: SubmissionSummary[];
   runs: RunSummary[];
 };

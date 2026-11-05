@@ -20,11 +20,21 @@ Atthar asked again for the code to follow the thesis (`~/ITB/Tesis/BAB 3.pdf`, 6
 7. **Rater sheet (III.7).** Adds the whole analysis as context, empty columns for the rater (`label_kognitif`, `indikator_<name>` per rubric indicator, `tidak_dapat_dinilai`, `catatan_penilai`), and `?rater=<name>` for a per-rater submission order (deterministic hash), so fatigue does not fall on the same submissions for both raters.
 8. **Technical terms only in the admin area (III.3).** The results page showed lecturers "Mode: Multi-agen" and a "Model … tidak tersedia" alert; the mode badge is admin-only and the alert says "Layanan penilai".
 
-Open, asked of Atthar (not invented): the group mapping and Gambar II.1's two-band figure; the connector-sentence rule (still the `ponytail:` heuristic, and it must be final before the rater sheet is exported, since segments are now stored); metacognitive examples' shape and source; the source of cognitive C1–C4 (the archive is a manajemen risiko TI course, the examples are about database normalisation); one retry vs `LLM_MAX_ATTEMPTS=3`; the evidence check's position relative to synthesis (Gambar III.3 checks synthesis output, synthesis cites nothing); whether the lecturer picks the rubric version (KF-02). Still provisional from 2026-11-03: metacognitive labels pending blind rater labelling. Not done: confidence and token counts (still not in the thesis).
+**Atthar's answers to the seven open questions (2026-11-05, relayed by the coordinator):**
 
-Neon: not touched. Needs migration 0008 and a reseed (rubric v3, four prompt templates, calibration) — see the report of this date.
+9. **Level groups.** Keep three groups, C1–C2 rendah / C3–C4 menengah / C5–C6 tinggi, stored as segment counts. Gambar II.1 (two bands) is redrawn in the thesis. Options: three groups (chosen), two bands, proportions. Decided by: Atthar.
+10. **Connector-sentence rule (III.6).** Keep the current rule (a sentence under 4 words or ending in ":" merges into the next) as the final rule; its `ponytail:` placeholder status is dropped in `app/agents/segments.py`. It goes into the annotation guideline and Bab IV. Options: keep and document (chosen), a new rule from the guideline. Decided by: Atthar.
+11. **Metacognitive few-shot.** Left as is until the raters relabel them blind (Bab III.8); reshaping waits for their labels. Options: wait (chosen), reshape now. Decided by: Atthar.
+12. **Cognitive C1–C4.** Confirmed from the archive; no change. Decided by: Atthar.
+13. **Retry count (III.4).** `LLM_MAX_ATTEMPTS` default 3 → **2** (one retry) in `app/config.py`, `.env.example`, `docs/phase-4/design.md` and `tests/test_llm_client.py`. It covers every failure the client retries — invalid JSON, a schema or label violation, a timeout, a 5xx — not only the schema case Bab III.4 names; Atthar accepted that. The job-level retry (`worker.MAX_ATTEMPTS = 3`, a whole submission re-queued) is a different mechanism and is unchanged. Options: keep 3 and reword the thesis, set 2 (chosen). Decided by: Atthar.
+14. **Evidence check position.** Kept: the specialists' quotes are checked, synthesis is retried once with the reason, then "perlu ditinjau"; Bab IV describes it this way. Options: keep (chosen), retry the specialist, make synthesis cite quotes. Decided by: Atthar.
+15. **Rubric version (KF-02).** Stays automatic (an assignment pins the owner's newest version); the assignment page now shows it read-only ("Versi rubrik: n"), via a new `rubric_version` field on `GET /assignments/{id}`. Options: automatic + read-only (chosen), a dropdown, one shared admin rubric. Decided by: Atthar.
 
-Verified locally (thesis_test only): ruff clean, mypy clean, pytest 197 passed (8 new); frontend lint, tsc, build, check:evidence pass.
+Still provisional from 2026-11-03: metacognitive labels pending blind rater labelling. Not done: confidence and token counts (still not in the thesis).
+
+Neon: the local backend (`uvicorn --reload`, `.env` → Neon) reloaded this code before 0008 was applied, so an upload failed with `column "analysis_segments" of relation "submissions" does not exist`. A backup was taken (`~/thesis_pre0008.dump`, 2026-11-05 23:00 WIB): a plain `pg_dump` as `thesis_migrator` is refused by FORCEd RLS, so it was dumped with `--enable-row-security` and `PGOPTIONS="-c app.current_user_id=<the only user>"`; Neon has one user, so the dump is complete (row counts checked against live). Applying 0008 was blocked by the agent's permission classifier; Atthar runs `scripts.migrate` (0008) and `scripts.seed_rubric` (rubric v3, four prompt templates, calibration) himself.
+
+Verified locally (thesis_test only), after the answers above: ruff clean, mypy clean, pytest 198 passed (9 new since the morning); frontend lint, tsc, build, check:evidence pass.
 
 ## 2026-11-03 — Code aligned to Bab I–III (paired input, segment scoring, thesis indicators)
 

@@ -135,8 +135,10 @@ def get_assignment(assignment_id: uuid.UUID, user: CurrentUser) -> AssignmentDet
             "       (select count(*) from submissions s where s.assignment_id = a.id) as submission_count, "
             "       (select count(*) from submissions s where s.assignment_id = a.id "
             "        and exists (select 1 from system_scores sc where sc.submission_id = s.id)) "
-            "        as graded_count "
-            "from assignments a where a.id = %s",
+            "        as graded_count, "
+            "       rv.version as rubric_version "
+            "from assignments a left join rubric_versions rv on rv.id = a.rubric_version_id "
+            "where a.id = %s",
             (assignment_id,),
         ).fetchone()
         if assignment is None:
