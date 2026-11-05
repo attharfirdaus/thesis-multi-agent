@@ -28,6 +28,16 @@ from app.ingest.guard import EgressBlocked, assert_sendable
 
 SchemaT = TypeVar("SchemaT", bound=BaseModel)
 
+# Per-segment answers grow with the analysis, so a fixed budget cannot hold them: a 71-segment analysis
+# needed 5,416 completion tokens from the cognitive agent and 1,495 from the metacognitive one (76 and
+# 21 per segment), against a cap of 1,024 sized for the old whole-text answer — every attempt was cut
+# off mid-JSON and both dimensions failed (measured on the configured model, 2026-11-05). Each labelled
+# segment therefore adds this much to `llm_max_tokens`, and the time to generate it to the timeout.
+# ponytail: per-segment constants measured on one model; re-measure on a model swap.
+TOKENS_PER_SEGMENT = 128
+# The same call generated ~47 tokens/s; 40 leaves headroom for a slower moment on the free tier.
+TOKENS_PER_SECOND = 40
+
 
 class ProviderNotConfigured(RuntimeError):
     """The environment names no provider, key or model, so no call can be made at all."""
@@ -75,6 +85,7 @@ class ProviderClient:
         temperature: float | None = None,
         seed: int | None = None,
         check: Callable[[BaseModel], None] | None = None,
+        segments: int = 0,
     ) -> Completion:
         """Send one request and return the response parsed into `schema`.
 
@@ -85,6 +96,9 @@ class ProviderClient:
         per run and never by editing a constant here. `check` is the caller's own validation of a
         schema-valid answer (a level outside the rubric, a segment left unlabelled): it raises
         `ValueError`, and that answer is retried exactly like one that failed the schema.
+
+        `segments` is how many segments the answer labels, one entry each: it raises the token budget
+        and the timeout by `TOKENS_PER_SEGMENT` per segment, so a long analysis is not truncated.
         """
         settings = self._settings
         base_url, api_key, model = self._route(settings)
@@ -102,7 +116,7 @@ class ProviderClient:
             # Bounded on purpose: an unbounded generation is a call that never returns (see
             # `llm_max_tokens` in app/config.py). A truncated answer is invalid JSON and costs one
             # attempt, which is the failure mode we want over an agent that hangs until the timeout.
-            "max_tokens": settings.llm_max_tokens,
+            "max_tokens": settings.llm_max_tokens + TOKENS_PER_SEGMENT * segments,
             # The configured model is a reasoning model: it writes its deliberation into `reasoning`
             # and the answer into `content`, out of the same token budget. Asked to score a
             # 9k-character analysis on 2026-10-16 it spent every token it was given on reasoning —
@@ -130,6 +144,12 @@ class ProviderClient:
             f"{base_url.rstrip('/')}/chat/completions",
             headers={"Authorization": f"Bearer {api_key}"},
             json=body,
+            # Per request, so it also holds for an injected client.
+            extensions={
+                "timeout": httpx.Timeout(
+                    settings.llm_timeout_seconds + TOKENS_PER_SEGMENT * segments / TOKENS_PER_SECOND
+                ).as_dict()
+            },
         )
         attempts = settings.llm_max_attempts
         if self._http is None:

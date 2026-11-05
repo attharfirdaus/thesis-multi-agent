@@ -19,6 +19,7 @@ from app.config import get_settings
 from app.ingest.identity_store import read_many as read_identities
 from app.jobs.queue import enqueue_run
 from app.jobs.worker import process_run
+from app.llm.client import TOKENS_PER_SEGMENT
 from app.routers.auth import CurrentUser
 from app.schemas import (
     EvidenceOut,
@@ -105,6 +106,8 @@ def _model_config() -> dict:
         # Bounds the answer's length, and a truncated answer is a failed attempt rather than a score,
         # so a run cannot be reproduced without it.
         "max_tokens": settings.llm_max_tokens,
+        # Added per labelled segment on top of `max_tokens` (app/llm/client.py).
+        "tokens_per_segment": TOKENS_PER_SEGMENT,
     }
 
 

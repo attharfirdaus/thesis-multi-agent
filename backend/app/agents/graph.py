@@ -214,6 +214,7 @@ def _cognitive_node(client: ProviderClient | None) -> Callable[[GraphState], dic
                 system=system,
                 user=user,
                 schema=CognitiveResult,
+                segments=len(_segments(state)),
                 check=lambda parsed: _check_levels(cast(CognitiveResult, parsed).segments, state),
             )
         except _FATAL:
@@ -246,6 +247,7 @@ def _metacognitive_node(client: ProviderClient | None) -> Callable[[GraphState],
                 system=system,
                 user=user,
                 schema=MetacognitiveResult,
+                segments=len(_segments(state)),
                 check=lambda parsed: _check_indicators(
                     cast(MetacognitiveResult, parsed).segments, state
                 ),
@@ -291,6 +293,7 @@ def _single_agent_node(client: ProviderClient | None) -> Callable[[GraphState], 
                 system=system,
                 user=user,
                 schema=SingleAgentResult,
+                segments=len(_segments(state)),
                 check=lambda parsed: _check_single(parsed, state),
             )
         except _FATAL:

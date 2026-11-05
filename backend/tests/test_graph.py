@@ -54,11 +54,13 @@ class StubClient:
     def __init__(self, plan: dict[type[BaseModel], object]) -> None:
         self.plan = plan
         self.calls: list[type[BaseModel]] = []
+        self.segments: dict[type[BaseModel], object] = {}
 
     def complete_json(
         self, *, system: str, user: str, schema: type[BaseModel], check=None, **_: object
     ) -> Completion:
         self.calls.append(schema)
+        self.segments[schema] = _.get("segments")
         outcome = self.plan[schema]
         if isinstance(outcome, list):
             outcome = outcome.pop(0)
@@ -297,6 +299,18 @@ def test_a_segment_without_indicators_is_not_an_evidence_failure(prompt_calls):
 def test_build_graph_compiles_without_a_client():
     """The production entry point builds its own client; a caller may inject one (JobQueue does)."""
     assert graph.build_graph() is not None
+
+
+def test_every_labelling_call_states_how_many_segments_it_labels(prompt_calls):
+    """The client sizes the token budget from it; without it a long analysis is truncated mid-JSON and
+    both dimensions fail (regression, 2026-11-05)."""
+    multi = StubClient(full_plan())
+    evaluate_submission(make_state(), multi)
+    single = StubClient({SingleAgentResult: single_agent_result()})
+    evaluate_submission(make_state(mode="single_agent"), single)
+
+    assert multi.segments == {CognitiveResult: 1, MetacognitiveResult: 1, SynthesisResult: None}
+    assert single.segments == {SingleAgentResult: 1}
 
 
 def test_single_agent_mode_calls_once_and_scores_both_dimensions(prompt_calls):

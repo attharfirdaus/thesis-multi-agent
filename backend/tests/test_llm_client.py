@@ -15,6 +15,8 @@ import pytest
 from app.agents.models import CognitiveResult
 from app.config import get_settings
 from app.llm.client import (
+    TOKENS_PER_SECOND,
+    TOKENS_PER_SEGMENT,
     Completion,
     ModelUnavailable,
     ProviderClient,
@@ -116,6 +118,23 @@ def test_request_is_configured_and_carries_the_schema_both_ways(monkeypatch):
     # The prompt copy, for the free endpoints that ignore response_format.
     assert '"level"' in body["messages"][1]["content"]
     assert calls[0].headers["authorization"] == f"Bearer {CONFIGURED['LLM_API_KEY']}"
+
+
+def test_budget_and_timeout_grow_with_the_segments_labelled(monkeypatch):
+    """Regression, 2026-11-05: a 71-segment analysis needed 5,416 completion tokens from the cognitive
+    agent, the fixed cap was 1,024, and every attempt came back cut off mid-JSON — both dimensions
+    failed on every real submission while synthesis, a short answer, passed."""
+    configure(monkeypatch)
+    provider, calls = stub([json.dumps(PAYLOAD)])
+
+    provider.complete_json(system=SYSTEM, user=USER, schema=CognitiveResult, segments=71)
+
+    budget = sent_body(calls[0])["max_tokens"]
+    assert budget == 1024 + 71 * TOKENS_PER_SEGMENT
+    assert budget >= 5416  # what the real model needed for that submission
+    # Generating the budget must fit inside the timeout, or the bigger budget only trades a truncation
+    # for a read timeout (the same call took 115.8 s against a 120 s timeout).
+    assert calls[0].extensions["timeout"]["read"] >= 120 + 71 * TOKENS_PER_SEGMENT / TOKENS_PER_SECOND
 
 
 def test_caller_temperature_and_seed_override_config(monkeypatch):

@@ -54,7 +54,8 @@ class Settings(BaseSettings):
     # A hard ceiling on generated tokens. Without one, generation is unbounded: asked to score a
     # 9k-character analysis on 2026-10-16, the model emitted for more than 300 seconds and produced
     # nothing, while the same prompt with a cap answered in 8 seconds. Legitimate answers measured on
-    # real submissions are 750–1,046 characters (~200–260 tokens), so this leaves ~4x headroom.
+    # real submissions are 750–1,046 characters (~200–260 tokens), so this leaves ~4x headroom. It is the
+    # base: a per-segment answer adds `TOKENS_PER_SEGMENT` per segment on top (app/llm/client.py).
     llm_max_tokens: int = Field(default=1024, alias="LLM_MAX_TOKENS")
 
     # The real identifier (DECISIONS.md, 2026-10-16): held outside Neon in a local, encrypted SQLite

@@ -172,7 +172,7 @@ class StubClient:
         self.calls: list[type] = []
         self.users: list[str] = []
 
-    def complete_json(self, *, system, user, schema, temperature=None, seed=None, check=None):
+    def complete_json(self, *, system, user, schema, check=None, **_kwargs):
         self.calls.append(schema)
         self.users.append(user)
         payload = {
