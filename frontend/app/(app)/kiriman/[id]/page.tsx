@@ -4,7 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
 
-import { AdminOnly, AppShell } from "@/components/app-shell";
+import { AdminOnly } from "@/components/app-shell";
 import { StatusBadge, runStatus, segmentationStatus } from "@/components/status-badge";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
@@ -28,6 +28,16 @@ const DIMENSION_LABEL: Record<Score["dimension"], string> = {
   metacognitive: "Indikator Metakognitif",
 };
 
+/** The pseudo score id that marks the segment the lecturer has open, so it is highlighted like evidence. */
+const OPEN_SEGMENT = "__segment";
+
+/**
+ * Text as stored keeps the line breaks of the PDF it came from, in the middle of sentences. For reading,
+ * a single break becomes a space unless a blank line or a list item follows; the stored text and every
+ * offset into it are untouched, because this runs on a piece that was already sliced.
+ */
+const unwrap = (piece: string): string => piece.replace(/(?<!\n)\n(?!\n|\s*(?:\d{1,2}[.)]|[-•–*])\s)/g, " ");
+
 const TEXTAREA_CLASS =
   "w-full rounded-lg border border-input bg-transparent px-2.5 py-1.5 text-base leading-7 outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50";
 
@@ -45,10 +55,13 @@ export default function KirimanPage() {
   const [savingSeg, setSavingSeg] = useState(false);
   const [commentDrafts, setCommentDrafts] = useState<Record<string, string>>({});
   const [savingComment, setSavingComment] = useState(false);
+  const [openSegment, setOpenSegment] = useState<{ start: number; end: number } | null>(null);
 
+  // `?run=` names the run to show: the results screen links here with the run it is displaying. Read
+  // from the address bar at call time — `load` only ever runs in the browser.
   const load = useCallback(
     () =>
-      api.getSubmission(id).then(
+      api.getSubmission(id, new URLSearchParams(window.location.search).get("run")).then(
         (data) => {
           setDetail(data);
           return data;
@@ -65,14 +78,43 @@ export default function KirimanPage() {
     void load();
   }, [load]);
 
+  // The confirmation floats over the page, so it clears itself.
+  useEffect(() => {
+    if (note === null) return;
+    const timer = setTimeout(() => setNote(null), 5000);
+    return () => clearTimeout(timer);
+  }, [note]);
+
   const text = detail?.student_analysis_text ?? "";
-  const segments = detail ? buildSegments(text, detail.scores) : [];
+  const highlighted: Score[] = detail
+    ? [
+        ...detail.scores,
+        ...(openSegment
+          ? [
+              {
+                id: OPEN_SEGMENT,
+                dimension: "cognitive" as const,
+                indicator: null,
+                level: "",
+                rationale: null,
+                evidence: [{ quote: "", start_offset: openSegment.start, end_offset: openSegment.end }],
+              },
+            ]
+          : []),
+      ]
+    : [];
+  const segments = detail ? buildSegments(text, highlighted) : [];
   const levels = detail?.rubric?.levels ?? [];
   const levelNames = detail?.rubric?.level_names ?? {};
   const storedAi = detail?.ai_output_text ?? "";
   // The offsets sent below index the same string the API splits; see combinedDocument for the rule.
   const combined = combinedDocument(storedAi, text);
   const offset = boundary ?? storedAi.length;
+  // The boundary snaps to the start of a line: it always falls between two blocks of the document, and
+  // a slider over single characters could not be placed (one pixel was a dozen characters or more).
+  const lineStarts = [0];
+  for (let i = combined.indexOf("\n"); i !== -1; i = combined.indexOf("\n", i + 1)) lineStarts.push(i + 1);
+  const lineIndex = Math.max(lineStarts.findLastIndex((start) => start <= offset), 0);
   const previewAi = combined.slice(0, offset);
   const previewAnalysis = combined.slice(offset);
 
@@ -100,6 +142,37 @@ export default function KirimanPage() {
     } finally {
       setSavingReview(false);
     }
+  }
+
+  /** Accept every score of the run on screen that has no review yet. Reviewed scores are left alone. */
+  async function onAcceptAll() {
+    if (!detail?.run) return;
+    const confirmed = window.confirm(
+      "Terima semua nilai yang belum ditinjau pada kiriman ini, termasuk label setiap segmen? " +
+        "Nilai yang sudah Anda terima atau ubah tidak berubah.",
+    );
+    if (!confirmed) return;
+    setSavingReview(true);
+    setError(null);
+    try {
+      const { accepted } = await api.acceptAll(id, detail.run.id);
+      await load();
+      setNote(`${accepted} nilai diterima.`);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Gagal menyimpan tinjauan.");
+    } finally {
+      setSavingReview(false);
+    }
+  }
+
+  /** Opening a segment highlights it in the text beside it, like a piece of evidence. */
+  function onSegmentToggle(open: boolean, start: number, end: number) {
+    if (!open) return;
+    setOpenSegment({ start, end });
+    setActiveScoreId(OPEN_SEGMENT);
+    requestAnimationFrame(() =>
+      document.querySelector(`[data-evidence~="${OPEN_SEGMENT}"]`)?.scrollIntoView({ block: "center", behavior: "smooth" }),
+    );
   }
 
   async function onComment(scoreId: string) {
@@ -153,6 +226,15 @@ export default function KirimanPage() {
 
   async function onSaveSegmentation(event: React.FormEvent) {
     event.preventDefault();
+    if (
+      detail?.scores.length &&
+      !window.confirm(
+        "Nilai, tinjauan, dan umpan balik kiriman ini dibuat dari teks dengan batas yang lama, sehingga akan " +
+          "dihapus dan kiriman perlu dinilai ulang. Simpan batas baru?",
+      )
+    ) {
+      return;
+    }
     setSavingSeg(true);
     setError(null);
     setNote(null);
@@ -326,7 +408,7 @@ export default function KirimanPage() {
   }
 
   return (
-    <AppShell>
+    <>
       {detail === null ? (
         <p className="text-muted-foreground">Memuat…</p>
       ) : (
@@ -361,34 +443,57 @@ export default function KirimanPage() {
               <AlertDescription>{error}</AlertDescription>
             </Alert>
           ) : null}
+          {/* Fixed, so a confirmation is seen from wherever on this long page the action was taken. */}
           {note ? (
-            <Alert>
-              <AlertDescription>{note}</AlertDescription>
-            </Alert>
+            <div
+              role="status"
+              className="fixed right-4 bottom-4 z-50 max-w-sm rounded-lg bg-foreground px-4 py-3 text-sm text-background shadow-lg"
+            >
+              {note}
+            </div>
           ) : null}
 
           {detail.review_flags?.length ? (
             <Alert>
               <AlertDescription>
                 Kiriman ini perlu ditinjau: {flagSentences(detail.review_flags).join(" ")}
+                {detail.unlocated_quotes?.length ? (
+                  <ul className="mt-2 list-disc pl-5">
+                    {detail.unlocated_quotes.map((item) => (
+                      <li key={`${item.source}-${item.segment}-${item.quote}`}>
+                        Segmen {item.segment} ({DIMENSION_LABEL[item.source].toLowerCase()}): kutipan “{item.quote}”
+                        tidak ada pada segmen itu.
+                      </li>
+                    ))}
+                  </ul>
+                ) : null}
               </AlertDescription>
             </Alert>
           ) : null}
 
           <div className="grid items-start gap-6 lg:grid-cols-2">
-            <Card className="lg:sticky lg:top-8">
+            <div className="flex flex-col gap-4 lg:sticky lg:top-8">
+            {storedAi ? (
+              <details className="rounded-xl bg-card p-4 ring-1 ring-foreground/10">
+                <summary className="cursor-pointer font-medium">Keluaran AI yang dianalisis mahasiswa</summary>
+                <p className="mt-3 max-h-72 overflow-y-auto text-base leading-7 whitespace-pre-wrap text-muted-foreground">
+                  {unwrap(storedAi)}
+                </p>
+              </details>
+            ) : null}
+            <Card>
               <CardHeader>
                 <CardTitle>Analisis mahasiswa</CardTitle>
                 <CardDescription>Kutipan bukti disorot pada posisinya di dalam tulisan.</CardDescription>
               </CardHeader>
-              <CardContent className="lg:max-h-[calc(100vh-14rem)] lg:overflow-y-auto">
+              <CardContent className="lg:max-h-[calc(100vh-18rem)] lg:overflow-y-auto">
                 {text.length === 0 ? (
                   <p className="text-muted-foreground">Teks analisis mahasiswa belum tersedia.</p>
                 ) : (
                   <p className="text-base leading-8 whitespace-pre-wrap">
                     {segments.map((segment) =>
                       segment.scoreIds.length === 0 ? (
-                        <span key={segment.start}>{segment.text}</span>
+                        <span key={segment.start}>{unwrap(segment.text)}</span>
                       ) : (
                         <mark
                           key={segment.start}
@@ -399,7 +504,7 @@ export default function KirimanPage() {
                               : "bg-amber-100"
                           }`}
                         >
-                          {segment.text}
+                          {unwrap(segment.text)}
                         </mark>
                       ),
                     )}
@@ -407,8 +512,43 @@ export default function KirimanPage() {
                 )}
               </CardContent>
             </Card>
+            </div>
 
             <div className="flex flex-col gap-6">
+              {detail.synthesis ? (
+                <Card>
+                  <CardHeader>
+                    <CardTitle>Ringkasan penilaian</CardTitle>
+                    <CardDescription>Penjelasan yang menyatukan kedua dimensi.</CardDescription>
+                  </CardHeader>
+                  <CardContent className="flex flex-col gap-3">
+                    <p className="text-muted-foreground">{detail.synthesis.rationale}</p>
+                    {detail.synthesis.inconsistencies.length > 0 ? (
+                      <div>
+                        <p className="text-sm font-medium">Alasan yang tidak sesuai dengan kutipannya</p>
+                        <ul className="list-disc pl-5 text-sm text-muted-foreground">
+                          {detail.synthesis.inconsistencies.map((item) => (
+                            <li key={item}>{item}</li>
+                          ))}
+                        </ul>
+                      </div>
+                    ) : null}
+                  </CardContent>
+                </Card>
+              ) : null}
+
+              {detail.run && detail.scores.length > 0 ? (
+                <div className="flex flex-wrap items-center gap-3">
+                  <Button variant="outline" disabled={savingReview} onClick={() => void onAcceptAll()}>
+                    Terima semua yang belum ditinjau
+                  </Button>
+                  <span className="text-sm text-muted-foreground">
+                    {new Set(detail.reviews.map((review) => review.system_score_id)).size} dari{" "}
+                    {detail.scores.length + (detail.segment_scores?.length ?? 0)} nilai sudah ditinjau.
+                  </span>
+                </div>
+              ) : null}
+
               {detail.scores.length === 0 ? (
                 <Card>
                   <CardContent>
@@ -438,7 +578,13 @@ export default function KirimanPage() {
                         .map((s) => s.indicator);
                       const unit = rows[0];
                       return (
-                        <details key={index} className="rounded-lg border p-3">
+                        <details
+                          key={index}
+                          className="rounded-lg border p-3"
+                          onToggle={(event) =>
+                            onSegmentToggle(event.currentTarget.open, unit.segment_start, unit.segment_end)
+                          }
+                        >
                           <summary className="cursor-pointer">
                             <span className="font-medium">Segmen {index}</span>
                             {" · "}
@@ -447,7 +593,7 @@ export default function KirimanPage() {
                             {present.length ? present.join(", ") : "tanpa indikator"}
                           </summary>
                           <div className="mt-3 flex flex-col gap-3">
-                            <p className="border-l-2 pl-3">{text.slice(unit.segment_start, unit.segment_end)}</p>
+                            <p className="border-l-2 pl-3">{unwrap(text.slice(unit.segment_start, unit.segment_end))}</p>
                             {rows.map((score) => scoreCard(score, true))}
                           </div>
                         </details>
@@ -523,7 +669,8 @@ export default function KirimanPage() {
                   <CardTitle>Perbaiki pemisahan teks</CardTitle>
                   <CardDescription>
                     Geser batas jika keluaran AI dan analisis mahasiswa terpisah pada tempat yang keliru.
-                    Isi teks tidak dapat diubah dari halaman ini.
+                    Isi teks tidak dapat diubah dari halaman ini. Nilai yang sudah ada dihapus saat batas
+                    berubah, karena dibuat dari teks yang lama.
                   </CardDescription>
                 </CardHeader>
                 <CardContent>
@@ -546,13 +693,14 @@ export default function KirimanPage() {
                         id="boundary"
                         type="range"
                         min={0}
-                        max={Math.max(combined.length - 1, 0)}
-                        value={offset}
-                        onChange={(event) => setBoundary(Number(event.target.value))}
+                        max={lineStarts.length - 1}
+                        value={lineIndex}
+                        onChange={(event) => setBoundary(lineStarts[Number(event.target.value)])}
                         className="w-full accent-primary"
                       />
                       <p className="text-sm text-muted-foreground">
-                        Batas di karakter {offset} dari {combined.length}.
+                        Batas di awal baris {lineIndex + 1} dari {lineStarts.length}. Gunakan tombol panah
+                        untuk menggeser satu baris.
                       </p>
                     </div>
                     <Button type="submit" disabled={savingSeg || boundary === null} className="self-start">
@@ -565,6 +713,6 @@ export default function KirimanPage() {
           </div>
         </>
       )}
-    </AppShell>
+    </>
   );
 }

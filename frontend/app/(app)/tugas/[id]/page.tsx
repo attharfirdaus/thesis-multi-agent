@@ -2,50 +2,27 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
-import { useParams } from "next/navigation";
+import { useParams, useRouter } from "next/navigation";
 
-import { AdminOnly, AppShell } from "@/components/app-shell";
+import { AdminOnly } from "@/components/app-shell";
 import { StatusBadge, runStatus, segmentationStatus } from "@/components/status-badge";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { api, type AssignmentDetail, type ImportedFile, type RunSummary, type SubmissionSummary } from "@/lib/api";
-import { flagSentences, modeLabel, submissionLabel, warningSentences } from "@/lib/labels";
-
-/** Jobs per request: one call must not sit on the whole batch, and the page shows progress between calls. */
-const PROCESS_CHUNK = 2;
-
-/** Consecutive calls that finished no job mean the batch is stuck; stop driving and let the lecturer decide. */
-const MAX_STALLED = 2;
-
-/**
- * Bound on one process request. The backend's own worst case is three 120-second attempts per agent,
- * so this is generous on purpose; it exists only so a dead connection cannot pin the page for ever.
- */
-const PROCESS_TIMEOUT_MS = 30 * 60 * 1000;
+import {
+  api,
+  driveRun,
+  runPending,
+  type AssignmentDetail,
+  type ImportedFile,
+  type RunSummary,
+  type SubmissionSummary,
+} from "@/lib/api";
+import { flagSentences, importError, modeLabel, submissionLabel, warningSentences } from "@/lib/labels";
 
 const ACCEPTED_FILES = ".pdf,.docx,.txt,.zip";
-
-/**
- * While a process call is in flight the page asks the run for its state, because that is the only way
- * to see which submission the server has claimed: the lease is written when the job starts, and the
- * process response only arrives when it is over.
- */
-const IN_FLIGHT_POLL_MS = 3000;
-
-/** A run in one of these states is over; a leftover counter on it is history, not work to do. */
-const TERMINAL_RUN_STATUS = ["done", "failed", "cancelled"];
-
-/** Jobs the queue still owns. A `running` job is already claimed, so it must not be started again. */
-const pendingJobs = (jobs: RunSummary["jobs"]) => (jobs.queued ?? 0) + (jobs.running ?? 0);
-
-function duration(seconds: number): string {
-  const minutes = Math.floor(seconds / 60);
-  const rest = seconds % 60;
-  return minutes === 0 ? `${rest} detik` : `${minutes} menit ${rest} detik`;
-}
 
 /** What the lecturer is about to spend quota on, in the wording the two choices deserve. */
 function startQuestion(mode: string, onlyUngraded: boolean, ungradedCount: number): string {
@@ -94,8 +71,8 @@ export default function TugasPage() {
   const [note, setNote] = useState<string | null>(null);
   const [uploading, setUploading] = useState(false);
   const [driving, setDriving] = useState(false);
-  const [calling, setCalling] = useState(false);
-  const [elapsed, setElapsed] = useState(0);
+  const [editing, setEditing] = useState<{ title: string; course: string; prompt_text: string } | null>(null);
+  const router = useRouter();
   const [drivenRunId, setDrivenRunId] = useState<string | null>(null);
   const [cancellingRun, setCancellingRun] = useState(false);
   const [deletingId, setDeletingId] = useState<string | null>(null);
@@ -106,8 +83,8 @@ export default function TugasPage() {
   const fileInput = useRef<HTMLInputElement>(null);
   const drivingRun = useRef<string | null>(null);
   const resumedRun = useRef<string | null>(null);
-  const callStartedAt = useRef(0);
-  const callController = useRef<AbortController | null>(null);
+  // False once the page is left: the server keeps grading, this page just stops asking about it.
+  const watching = useRef(true);
   const cancelling = useRef(false);
   const starting = useRef(false);
 
@@ -132,31 +109,17 @@ export default function TugasPage() {
     void load();
   }, [load]);
 
-  /**
-   * A provider call reports nothing until it returns, so elapsed time is the only honest liveness
-   * signal the page can show while one submission is being judged.
-   */
   useEffect(() => {
-    if (!calling) return;
-    const timer = setInterval(() => {
-      setElapsed(Math.round((Date.now() - callStartedAt.current) / 1000));
-    }, 1000);
-    return () => clearInterval(timer);
-  }, [calling]);
-
-  // Naming what is being graded needs a second look while the call is open: by the time the process
-  // response arrives the job it claimed is already finished, so `in_flight` is only populated mid-call.
-  useEffect(() => {
-    if (!calling || drivenRunId === null) return;
-    const poll = setInterval(() => {
-      api.getRun(drivenRunId).then(setRun, () => {});
-    }, IN_FLIGHT_POLL_MS);
-    return () => clearInterval(poll);
-  }, [calling, drivenRunId]);
+    watching.current = true;
+    return () => {
+      watching.current = false;
+    };
+  }, []);
 
   /**
-   * Drive a run to completion. Each call evaluates a bounded chunk; the run itself lives in the
-   * database, so closing this tab loses only the loop, and a reload resumes it from `jobs`.
+   * Follow a run to its end. The server grades on its own thread and the run lives in the database,
+   * so this page only starts it and polls: leaving or reloading loses the watching, never the run, and
+   * coming back attaches to the same run instead of starting a second grader.
    */
   const drive = useCallback(
     async (runId: string) => {
@@ -166,53 +129,18 @@ export default function TugasPage() {
       setDriving(true);
       setError(null);
       setNote(null);
-      let stalled = 0;
-      let finished = -1;
-
       try {
-        for (;;) {
-          const controller = new AbortController();
-          const timeout = setTimeout(() => controller.abort(), PROCESS_TIMEOUT_MS);
-          callController.current = controller;
-          callStartedAt.current = Date.now();
-          setElapsed(0);
-          setCalling(true);
-          try {
-            await api.processRun(runId, PROCESS_CHUNK, controller.signal);
-          } finally {
-            clearTimeout(timeout);
-            callController.current = null;
-            setCalling(false);
-          }
-          const current = await api.getRun(runId);
-          setRun(current);
-          const { done, failed, queued } = jobTotals(current.jobs);
-          if (queued === 0) break;
-          if (done + failed === finished) {
-            stalled += 1;
-            if (stalled >= MAX_STALLED) {
-              setNote("Penilaian berhenti sebelum seluruh kiriman selesai. Tekan lanjutkan untuk mencoba lagi.");
-              break;
-            }
-          } else {
-            stalled = 0;
-            finished = done + failed;
-          }
+        const last = await driveRun(runId, setRun, () => watching.current);
+        if (watching.current && runPending(last)) {
+          setNote("Penilaian berhenti sebelum seluruh kiriman selesai. Tekan lanjutkan untuk mencoba lagi.");
         }
       } catch (err) {
-        // A cancel from this page aborts the call on purpose; the cancel control reports the outcome.
-        if (!cancelling.current) {
-          if (err instanceof DOMException && err.name === "AbortError") {
-            setNote("Permintaan penilaian melewati batas waktu tunggu. Penilaian dapat dilanjutkan.");
-          } else {
-            setError(err instanceof Error ? err.message : "Penilaian gagal dijalankan.");
-          }
-        }
+        if (!cancelling.current) setError(err instanceof Error ? err.message : "Penilaian gagal dijalankan.");
       } finally {
         drivingRun.current = null;
         setDrivenRunId(null);
         setDriving(false);
-        await load();
+        if (watching.current) await load();
       }
     },
     [load],
@@ -227,9 +155,7 @@ export default function TugasPage() {
     ? [...(run ? [run] : []), ...detail.runs.filter((item) => item.id !== run?.id)]
     : [];
   const unfinishedRunId =
-    liveRuns.find(
-      (item) => !TERMINAL_RUN_STATUS.includes(item.status) && pendingJobs(item.jobs) > 0,
-    )?.id ?? null;
+    liveRuns.find(runPending)?.id ?? null;
   const inFlightNames = (run?.in_flight ?? []).map((item) => item.pseudonym);
   const gradedCount = detail?.graded_count ?? 0;
   const ungradedCount = Math.max((detail?.submission_count ?? 0) - gradedCount, 0);
@@ -295,7 +221,7 @@ export default function TugasPage() {
     if (targetId === null || cancelling.current) return;
     const grading = (run?.in_flight ?? []).map((item) => item.pseudonym);
     // The server finishes whatever it has already claimed, whether or not this page managed to name it.
-    const stillFinishing = calling || grading.length > 0;
+    const stillFinishing = grading.length > 0;
     const finishingClause =
       grading.length > 0
         ? ` ${grading.join(", ")} sedang dinilai dan tetap diselesaikan.`
@@ -310,8 +236,6 @@ export default function TugasPage() {
     setError(null);
     setNote(null);
     try {
-      // Dropping this page's request stops the waiting; the server finishes the submission it holds.
-      callController.current?.abort();
       const cancelled = await api.cancelRun(targetId);
       setRun(cancelled);
       const jobs = jobTotals(cancelled.jobs);
@@ -352,8 +276,41 @@ export default function TugasPage() {
     }
   }
 
+  async function onSaveAssignment(event: React.FormEvent) {
+    event.preventDefault();
+    if (editing === null) return;
+    setError(null);
+    try {
+      await api.updateAssignment(id, {
+        title: editing.title.trim(),
+        course: editing.course.trim(),
+        prompt_text: editing.prompt_text.trim(),
+      });
+      setEditing(null);
+      await load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Gagal menyimpan tugas.");
+    }
+  }
+
+  /** Delete the assignment and everything under it. Confirmed, because nothing brings it back. */
+  async function onDeleteAssignment() {
+    const confirmed = window.confirm(
+      `Hapus tugas "${detail?.title}" beserta ${detail?.submission_count ?? 0} kiriman, seluruh nilai, tinjauan, ` +
+        "dan umpan baliknya? Tindakan ini tidak dapat dibatalkan.",
+    );
+    if (!confirmed) return;
+    setError(null);
+    try {
+      await api.deleteAssignment(id);
+      router.replace("/dasbor");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Gagal menghapus tugas.");
+    }
+  }
+
   return (
-    <AppShell>
+    <>
       {detail === null ? (
         <p className="text-muted-foreground">Memuat…</p>
       ) : (
@@ -369,10 +326,72 @@ export default function TugasPage() {
                 Versi rubrik: {detail.rubric_version ?? "belum ada"}
               </p>
             </div>
-            <Link href={`/tugas/${id}/hasil`} className="underline underline-offset-4 hover:text-foreground">
-              Lihat hasil penilaian
-            </Link>
+            <div className="flex flex-wrap items-center gap-3">
+              <Link href={`/tugas/${id}/hasil`} className="underline underline-offset-4 hover:text-foreground">
+                Lihat hasil penilaian
+              </Link>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() =>
+                  setEditing({ title: detail.title, course: detail.course, prompt_text: detail.prompt_text ?? "" })
+                }
+              >
+                Ubah tugas
+              </Button>
+              <Button variant="destructive" size="sm" disabled={driving} onClick={() => void onDeleteAssignment()}>
+                Hapus tugas
+              </Button>
+            </div>
           </header>
+
+          {editing ? (
+            <Card>
+              <CardHeader>
+                <CardTitle>Ubah tugas</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <form onSubmit={onSaveAssignment} className="flex flex-col gap-4">
+                  <div className="flex flex-col gap-2">
+                    <Label htmlFor="edit_title">Judul tugas</Label>
+                    <Input
+                      id="edit_title"
+                      required
+                      value={editing.title}
+                      onChange={(e) => setEditing({ ...editing, title: e.target.value })}
+                    />
+                  </div>
+                  <div className="flex flex-col gap-2">
+                    <Label htmlFor="edit_course">Mata kuliah</Label>
+                    <Input
+                      id="edit_course"
+                      required
+                      value={editing.course}
+                      onChange={(e) => setEditing({ ...editing, course: e.target.value })}
+                    />
+                  </div>
+                  <div className="flex flex-col gap-2">
+                    <Label htmlFor="edit_prompt">Teks tugas (opsional)</Label>
+                    <textarea
+                      id="edit_prompt"
+                      rows={4}
+                      value={editing.prompt_text}
+                      onChange={(e) => setEditing({ ...editing, prompt_text: e.target.value })}
+                      className="w-full rounded-lg border border-input bg-transparent px-2.5 py-1.5 text-base outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
+                    />
+                  </div>
+                  <div className="flex gap-3">
+                    <Button type="submit" disabled={!editing.title.trim() || !editing.course.trim()}>
+                      Simpan
+                    </Button>
+                    <Button type="button" variant="ghost" onClick={() => setEditing(null)}>
+                      Batal
+                    </Button>
+                  </div>
+                </form>
+              </CardContent>
+            </Card>
+          ) : null}
 
           {error ? (
             <Alert variant="destructive">
@@ -416,15 +435,15 @@ export default function TugasPage() {
 
               {imported ? (
                 <ul className="mt-4 flex flex-col gap-2">
-                  {imported.map((file) => (
-                    <li key={file.filename} className="flex flex-wrap items-center gap-2 text-sm">
+                  {imported.map((file, index) => (
+                    <li key={`${file.filename}-${index}`} className="flex flex-wrap items-center gap-2 text-sm">
                       <span className="font-medium">{file.filename}</span>
                       <StatusBadge
                         tone={file.status === "imported" ? "green" : "red"}
                         label={file.status === "imported" ? "Berhasil" : "Gagal"}
                       />
                       {file.pseudonym ? <span className="text-muted-foreground">{file.pseudonym}</span> : null}
-                      {file.status === "failed" ? <span>Berkas ini gagal dibaca.</span> : null}
+                      {file.status === "failed" ? <span>{importError(file.error)}</span> : null}
                       {file.warnings?.length ? (
                         <span className="text-muted-foreground">
                           {warningSentences(file.warnings).join(" ")}
@@ -444,7 +463,7 @@ export default function TugasPage() {
             <CardHeader>
               <CardTitle>Penilaian</CardTitle>
               <CardDescription>
-                Penilaian berjalan di latar belakang dan dapat dilanjutkan setelah halaman dimuat ulang.
+                Penilaian berjalan di server dan tetap berlanjut ketika halaman ini ditutup.
               </CardDescription>
             </CardHeader>
             <CardContent className="flex flex-col gap-4">
@@ -488,18 +507,17 @@ export default function TugasPage() {
                   >
                     <div className="h-full w-1/3 animate-pulse rounded-full bg-primary" />
                   </div>
-                  {calling && inFlightNames.length > 0 ? (
-                    <p className="text-sm">
-                      Sedang menilai <span className="font-medium">{inFlightNames.join(", ")}</span>
-                    </p>
-                  ) : null}
-                  <p className="text-sm text-muted-foreground">
-                    {calling
-                      ? `Menilai… ${duration(elapsed)}`
-                      : "Menilai… menyiapkan kiriman berikutnya."}
+                  <p className="text-sm">
+                    {inFlightNames.length > 0 ? (
+                      <>
+                        Sedang menilai <span className="font-medium">{inFlightNames.join(", ")}</span>
+                      </>
+                    ) : (
+                      "Menilai… menyiapkan kiriman berikutnya."
+                    )}
                   </p>
                   <p className="text-sm text-muted-foreground">
-                    Penilaian berjalan per kiriman, jadi waktu per tahap tidak dilaporkan.
+                    Penilaian berjalan di server. Halaman ini boleh ditinggalkan dan dibuka lagi kapan saja.
                   </p>
                 </div>
               ) : null}
@@ -644,7 +662,7 @@ export default function TugasPage() {
                 </p>
               ) : (
                 <div className="overflow-x-auto">
-                  <table className="w-full border-collapse text-left">
+                  <table className="w-full min-w-[640px] border-collapse text-left">
                     <thead>
                       <tr className="border-b">
                         <th scope="col" className="py-2 pr-4 font-medium">
@@ -682,9 +700,10 @@ export default function TugasPage() {
                             {submission.review_flags?.length ? (
                               <div className="flex flex-col gap-1">
                                 <StatusBadge tone="amber" label="Perlu Ditinjau" className="self-start" />
-                                <span className="text-muted-foreground">
+                                <details className="text-sm text-muted-foreground">
+                                  <summary className="cursor-pointer">Alasan</summary>
                                   {flagSentences(submission.review_flags).join(" ")}
-                                </span>
+                                </details>
                               </div>
                             ) : (
                               <span className="text-muted-foreground">—</span>
@@ -721,6 +740,6 @@ export default function TugasPage() {
           </Card>
         </>
       )}
-    </AppShell>
+    </>
   );
 }

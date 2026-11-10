@@ -25,6 +25,7 @@ pending, and the cognitive and metacognitive agents then refuse to run (PRD §6)
 """
 
 import argparse
+import functools
 import json
 import pathlib
 import sys
@@ -220,6 +221,38 @@ def seed(database_url: str, email: str | None, calibration: dict[str, Any]) -> l
     return report
 
 
+DEFAULT_CALIBRATION = str(pathlib.Path(__file__).with_name("calibration.json"))
+
+
+@functools.cache
+def _default_prompt_content() -> dict[str, str]:
+    return prompt_content(_calibration_from(DEFAULT_CALIBRATION))
+
+
+def ensure_seeded(cur: Any, owner_id: uuid.UUID) -> None:
+    """Give an account what a run needs, from inside the API. `cur` is a dict-row cursor in the
+    owner's tenant transaction.
+
+    - No rubric yet, or no calibration yet: the seeded ones are written. A lecturer who had just signed
+      up could not create an assignment until someone ran this script from a terminal (2026-11-10).
+      A rubric the admin edited is never overwritten: only a missing one is filled in.
+    - The agent templates are always brought level with `app.agents.prompts`. The agents prompt from the
+      code, so a stored template that lags behind it makes a run record a prompt version it did not use.
+    """
+    has_rubric = cur.execute(
+        "select 1 from rubric_versions where owner_id = %s limit 1", (owner_id,)
+    ).fetchone()
+    if has_rubric is None:
+        _seed_rubric(cur, owner_id)
+    calibrated = cur.execute(
+        "select 1 from prompt_versions where owner_id = %s and agent_name = 'calibration' limit 1",
+        (owner_id,),
+    ).fetchone()
+    for agent_name, template in _default_prompt_content().items():
+        if agent_name != "calibration" or calibrated is None:
+            _seed_prompt(cur, owner_id, agent_name, template)
+
+
 def _calibration_from(path: str) -> dict[str, Any]:
     """The calibration file: one block per analysis agent, each with instructions and examples.
 
@@ -241,7 +274,7 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--email", help="Owner of the seeded rows; defaults to the first admin.")
     parser.add_argument(
         "--calibration",
-        default=str(pathlib.Path(__file__).with_name("calibration.json")),
+        default=DEFAULT_CALIBRATION,
         help="JSON file with the per-agent calibration blocks (PRD §14).",
     )
     args = parser.parse_args(argv)

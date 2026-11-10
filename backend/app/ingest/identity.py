@@ -38,6 +38,7 @@ def extract_identity(filename: str, text: str) -> str | None:
     from_name = _NAME_IN_FILENAME.search(filename)
     if from_name:
         value = _clean(from_name.group("name"))
-        if value:
+        # "tanpa_garis_bawah.txt" is not a student called "bawah": a name in a filename is capitalised.
+        if value and not value.islower():
             return value
     return None

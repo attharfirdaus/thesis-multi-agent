@@ -77,11 +77,11 @@ export function AppShell({ children }: { children: ReactNode }) {
   return (
     <div className="flex min-h-screen flex-col md:flex-row">
       <aside className="border-b bg-sidebar md:w-64 md:shrink-0 md:border-r md:border-b-0">
-        <div className="flex h-full flex-col gap-6 p-6">
-          <p className="font-heading leading-snug font-semibold text-primary">
+        <div className="flex h-full flex-wrap items-center gap-x-4 gap-y-2 p-3 md:flex-col md:flex-nowrap md:items-stretch md:gap-6 md:p-6">
+          <p className="w-full font-heading leading-snug font-semibold text-primary md:w-auto">
             Penilaian Kedalaman Analisis Mahasiswa
           </p>
-          <nav aria-label="Navigasi utama">
+          <nav aria-label="Navigasi utama" className="flex gap-1 md:block">
             <Link href="/dasbor" aria-current={dashActive ? "page" : undefined} className={linkClass(dashActive)}>
               Dasbor
             </Link>
@@ -91,15 +91,15 @@ export function AppShell({ children }: { children: ReactNode }) {
               </Link>
             ) : null}
           </nav>
-          <div className="mt-auto flex flex-col gap-2">
+          <div className="ml-auto flex items-center gap-2 md:mt-auto md:ml-0 md:flex-col md:items-start">
             <p className="text-sm text-muted-foreground">{user?.name}</p>
-            <Button variant="outline" onClick={onLogout} className="self-start">
+            <Button variant="outline" onClick={onLogout} className="md:self-start">
               Keluar
             </Button>
           </div>
         </div>
       </aside>
-      <main className="flex-1 bg-muted/40 px-6 py-8">
+      <main className="min-w-0 flex-1 bg-muted/40 px-4 py-6 md:px-6 md:py-8">
         <UserContext.Provider value={user}>
           <div className="mx-auto flex max-w-5xl flex-col gap-6">{children}</div>
         </UserContext.Provider>

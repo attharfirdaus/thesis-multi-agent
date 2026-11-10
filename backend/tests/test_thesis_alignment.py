@@ -5,6 +5,7 @@ the model-unavailable flag."""
 import csv
 import io
 import json
+import uuid
 
 from conftest import INDICATORS, QUOTE_COGNITIVE, make_admin
 
@@ -97,7 +98,8 @@ def test_r_repetitions_share_one_group_and_a_final_run_freezes_its_versions(seed
     assert len({r[0] for r in runs}) == 1 and runs[0][0] is not None
     # Identical configuration across the group: the precondition of the consistency measure.
     assert len({str(r[2]) for r in runs}) == 1 and len({tuple(r[3]) for r in runs}) == 1
-    assert frozen_rubric is not None and frozen_prompts == 4
+    # Three agents, the baseline and the calibration: the newest version of each.
+    assert frozen_rubric is not None and frozen_prompts == 5
 
     for run_id in body["group_run_ids"]:
         assert client.post(f"/runs/{run_id}/process", headers=_csrf(seeded)).json()["status"] == "done"
@@ -386,3 +388,112 @@ def test_the_assignment_shows_its_pinned_rubric_version(seeded):
     """KF-02 (Atthar, 2026-11-05): the version is chosen automatically and shown read-only."""
     detail = seeded["client"].get(f"/assignments/{seeded['assignment']}").json()
     assert detail["rubric_version"] == 1
+
+
+# --------------------------------------------------------------- findings of the 2026-11-10 E2E run
+
+
+def test_split_keeps_list_numbers_with_their_items_and_abbreviations_inside_sentences():
+    from app.agents.segments import split_segments
+
+    listed = "Langkah yang dilakukan adalah:\n1. Membuat kebijakan internal.\n2. Menetapkan tujuan bisnis."
+    assert [s.text for s in split_segments(listed)] == [
+        "Langkah yang dilakukan adalah:\n1. Membuat kebijakan internal.",
+        "2. Menetapkan tujuan bisnis.",
+    ]
+    cited = "Menurut Smith et al. (2020) risiko itu penting. Lihat hlm. 5 pada dokumen resmi tersebut."
+    assert len(split_segments(cited)) == 2
+
+
+def test_header_is_stripped_and_a_loosely_copied_quote_is_still_located():
+    from app.agents.evidence import locate_quote
+    from app.routers.ingest import strip_header
+
+    text = "Tugas 1: Analisis COSO\nNama : [REDACTED]\nNIM : [REDACTED]\nDari hasil prompt, saya memahami COSO."  # noqa: E501
+    assert strip_header(text) == "Dari hasil prompt, saya memahami COSO."
+    assert strip_header("Tanpa blok identitas.") == "Tanpa blok identitas."
+    segment = "yaitu Valid &\nReliable, Privacy-\nenhanced, dan Fair."
+    found = locate_quote(segment, "yaitu, Valid & Reliable, Privacy- enhanced, dan Fair.")
+    assert found is not None and segment[found[0] : found[1]].endswith("dan Fair")
+    assert locate_quote(segment, "kalimat yang tidak pernah ditulis mahasiswa") is None
+
+
+def test_regrade_keeps_the_edit_and_a_second_driver_is_refused(scored_run, seeded):
+    from app.jobs import worker
+
+    client, submission = seeded["client"], seeded["submission"]
+    edited = client.patch(
+        f"/submissions/{submission}/feedback",
+        json={"edited_text": "Suntingan dosen."},
+        headers=_csrf(seeded),
+    )
+    assert edited.status_code == 200
+    run_id = client.post(f"/assignments/{seeded['assignment']}/runs", headers=_csrf(seeded)).json()["id"]
+
+    # A run this process already drives is not driven a second time.
+    assert worker._begin(uuid.UUID(run_id))
+    try:
+        busy = client.post(f"/runs/{run_id}/process", headers=_csrf(seeded)).json()
+        assert busy["busy"] is True and busy["jobs"] == {"queued": 1}
+    finally:
+        worker._driving.discard(uuid.UUID(run_id))
+
+    done = client.post(f"/runs/{run_id}/process", headers=_csrf(seeded)).json()
+    assert done["status"] == "done" and done["busy"] is False
+    detail = client.get(f"/submissions/{submission}").json()
+    assert detail["feedback"]["edited_text"] == "Suntingan dosen."
+    assert detail["synthesis"]["rationale"]
+    # The earlier run's scores stay reachable by naming the run.
+    assert client.get(f"/submissions/{submission}?run={scored_run}").json()["run"]["id"] == scored_run
+    accept = f"/submissions/{submission}/accept-all?run={run_id}"
+    assert client.post(accept, headers=_csrf(seeded)).json()["accepted"] > 0
+    assert client.post(accept, headers=_csrf(seeded)).json()["accepted"] == 0
+    with db.tenant_tx(seeded["user"]) as conn:
+        left = conn.execute("select count(*) from checkpoints where thread_id like %s", (f"{run_id}:%",))
+        assert left.fetchone()[0] == 0, "a finished job leaves no checkpoint behind"
+
+
+def test_moving_the_boundary_drops_the_scores_that_pointed_into_the_old_text(scored_run, seeded):
+    client, submission = seeded["client"], seeded["submission"]
+    moved = client.patch(
+        f"/submissions/{submission}/segmentation", json={"analysis_start": 20}, headers=_csrf(seeded)
+    )
+    assert moved.status_code == 200, moved.text
+    detail = client.get(f"/submissions/{submission}").json()
+    assert detail["scores"] == [] and detail["feedback"] is None and detail["review_flags"] == []
+
+
+def test_flags_and_unlocated_quotes_are_kept_per_run(scored_run, seeded):
+    """A later run's flags do not leak into an earlier run's screens, and the missing quote is named."""
+    from app.agents.models import CognitiveResult, SegmentLevel
+
+    client, submission, stub = seeded["client"], seeded["submission"], seeded["stub"]
+    original = stub.complete_json
+
+    def paraphrasing(*, schema, check=None, **kwargs):
+        if schema is not CognitiveResult:
+            return original(schema=schema, check=check, **kwargs)
+        answer = original(schema=schema, check=check, **kwargs)
+        first = answer.parsed.segments[0]
+        answer.parsed.segments[0] = SegmentLevel(
+            segment=first.segment,
+            level=first.level,
+            evidence_quote="kalimat karangan agen",
+            rationale=first.rationale,
+        )
+        return answer
+
+    stub.complete_json = paraphrasing
+    run_id = client.post(f"/assignments/{seeded['assignment']}/runs", headers=_csrf(seeded)).json()["id"]
+    assert client.post(f"/runs/{run_id}/process", headers=_csrf(seeded)).json()["needs_review"] == 1
+
+    newer = client.get(f"/submissions/{submission}?run={run_id}").json()
+    assert "evidence_unverified" in newer["review_flags"]
+    assert newer["unlocated_quotes"] == [
+        {"source": "cognitive", "segment": 1, "quote": "kalimat karangan agen"}
+    ]
+    older = client.get(f"/submissions/{submission}?run={scored_run}").json()
+    assert older["review_flags"] == [] and older["unlocated_quotes"] == []
+    assert client.get(f"/runs/{scored_run}").json()["needs_review"] == 0
+    results = client.get(f"/runs/{scored_run}/results").json()
+    assert results["submissions"][0]["review_flags"] == []

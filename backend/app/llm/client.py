@@ -103,7 +103,9 @@ class ProviderClient:
         settings = self._settings
         base_url, api_key, model = self._route(settings)
         schema_json = json.dumps(schema.model_json_schema(), ensure_ascii=False)
-        user_content = f"{user}\n\nReply with JSON only, matching this schema:\n{schema_json}"
+        # The schema travels twice, not three times: every caller's system turn already states it, and
+        # `response_format` carries it for endpoints that constrain decoding.
+        user_content = user
         self._assert_sendable(f"{system}\n\n{user_content}")
 
         body: dict[str, Any] = {
@@ -216,8 +218,12 @@ class ProviderClient:
             # Transport failures, a non-2xx status, malformed JSON, a missing choice and a schema
             # violation are one case on purpose: the only thing to do with any of them is try again,
             # and only the reason differs. ValidationError is a ValueError.
-            except (httpx.HTTPError, ValueError, KeyError, IndexError) as exc:
+            # TypeError is a `content: null` answer (`json.loads(None)`), which a reasoning model that
+            # spent its budget before answering returns: retried like any other unusable answer.
+            except (httpx.HTTPError, ValueError, KeyError, IndexError, TypeError) as exc:
                 last_reason = f"{type(exc).__name__}: {exc}"
+                if attempt < attempts and isinstance(exc, httpx.HTTPError):
+                    time.sleep(_backoff(exc, attempt, self._settings.llm_retry_backoff_seconds))
                 continue
             return Completion(
                 parsed=parsed,
@@ -228,6 +234,15 @@ class ProviderClient:
         raise ProviderError(
             f"no valid {schema.__name__} in {attempts} attempts; last: {last_reason}"
         )
+
+
+def _backoff(exc: httpx.HTTPError, attempt: int, base: float) -> float:
+    """Seconds to wait before the next attempt: the provider's `Retry-After` when it sent one, else
+    `base` doubled per attempt. Capped, so a hostile header cannot park a batch."""
+    response = getattr(exc, "response", None)
+    retry_after = response.headers.get("retry-after", "") if response is not None else ""
+    wait = float(retry_after) if retry_after.isdigit() else base * 2 ** (attempt - 1)
+    return min(wait, 60.0)
 
 
 def _model_gone(response: httpx.Response) -> bool:

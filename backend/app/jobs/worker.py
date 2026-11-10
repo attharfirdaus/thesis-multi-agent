@@ -13,6 +13,8 @@ and the job is retried until `MAX_ATTEMPTS` is reached.
 import argparse
 import json
 import sys
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from uuid import UUID
 
@@ -214,11 +216,9 @@ def _finish(owner_id: UUID, job: dict, state: GraphState) -> None:
 
 @contextmanager
 def _checkpointer():
-    """A LangGraph saver for the duration of one batch pass (PRD §6).
+    """A LangGraph saver for one job (PRD §6).
 
-    One connection for the whole pass rather than one per submission: the saver writes on every node
-    transition, so a connection per submission would add a connect to each of the two dozen jobs a pass
-    can claim. Missing checkpoint tables are a loud failure — `scripts/setup_checkpointer.py` is part of
+    Missing checkpoint tables are a loud failure — `scripts/setup_checkpointer.py` is part of
     setting up a database, and silently running without checkpointing would hide that.
 
     The serde allows exactly the Pydantic types the graph puts in its state. Without that, LangGraph falls
@@ -246,34 +246,63 @@ def _checkpointer():
         )
 
 
-def _run_one(owner_id: UUID, job: dict, summary: dict, checkpointer=None) -> None:
-    """Run one claimed job and record its outcome against the summary it is part of."""
-    try:
-        with db.tenant_tx(owner_id) as conn:
-            state = _load_state(
-                conn, owner_id=owner_id, run_id=job["run_id"], submission_id=job["submission_id"]
-            )
-        # Outside tenant context on purpose: the graph calls a provider and can take seconds, and
-        # holding a transaction across that would pin a pooled connection for the whole batch.
-        result = evaluate_submission(state, checkpointer=checkpointer)
-    except ModelUnavailable as error:
-        _flag_model_unavailable(owner_id, job, error)
-        summary["failed"] += 1
-        return
-    except Exception as error:  # noqa: BLE001 — a failed submission must never fail the batch
-        summary["failed" if _record_failure(owner_id, job, error) else "skipped"] += 1
-        return
+def _run_one(owner_id: UUID, job: dict) -> str:
+    """Run one claimed job and return its outcome: `done`, `failed` (out of retries) or `skipped`
+    (failed, will be retried).
+
+    Each job opens its own saver: jobs of one pass run on separate threads, and a job is tens of
+    seconds of provider calls against one connect.
+    """
+    thread_id = f"{job['run_id']}:{job['submission_id']}"
+    with _checkpointer() as saver:
+        try:
+            with db.tenant_tx(owner_id) as conn:
+                state = _load_state(
+                    conn, owner_id=owner_id, run_id=job["run_id"], submission_id=job["submission_id"]
+                )
+            # Outside tenant context on purpose: the graph calls a provider and can take seconds, and
+            # holding a transaction across that would pin a pooled connection for the whole batch.
+            result = evaluate_submission(state, checkpointer=saver)
+        except ModelUnavailable as error:
+            _flag_model_unavailable(owner_id, job, error)
+            saver.delete_thread(thread_id)
+            return "failed"
+        except Exception as error:  # noqa: BLE001 — a failed submission must never fail the batch
+            if not _record_failure(owner_id, job, error):
+                return "skipped"  # its checkpoint stays: the retry resumes from it
+            saver.delete_thread(thread_id)
+            return "failed"
 
     # A graph that produced nothing has not evaluated anything. Without this guard the job would be
     # marked done and the submission would look evaluated while carrying zero scores — which is how a
     # KeyError inside a prompt builder stayed invisible for a whole test run.
     if not any(result.get(agent) for agent in ("cognitive", "metacognitive", "synthesis")):
         failure = RuntimeError("no agent produced output: " + "; ".join(result.get("errors", [])))
-        summary["failed" if _record_failure(owner_id, job, failure) else "skipped"] += 1
-        return
+        return "failed" if _record_failure(owner_id, job, failure) else "skipped"
 
     _finish(owner_id, job, result)
-    summary["done"] += 1
+    return "done"
+
+
+# Runs being driven by this process. Two drivers on one run re-queue each other's in-flight jobs and
+# grade a submission twice — which is what leaving the assignment page and coming back did (seen
+# 2026-11-10). A crashed process loses this set with everything else, so `_requeue_stale` stays right.
+# ponytail: in-process registry, one API process assumed (README: the API runs locally). Move to a
+# heartbeat lease on `jobs` if the API ever runs more than one worker; the CLI is still on its honour.
+_driving: set[UUID] = set()
+_driving_lock = threading.Lock()
+
+
+def is_driving(run_id: UUID) -> bool:
+    return run_id in _driving
+
+
+def _begin(run_id: UUID) -> bool:
+    with _driving_lock:
+        if run_id in _driving:
+            return False
+        _driving.add(run_id)
+        return True
 
 
 def process_run(owner_id: UUID, run_id: UUID, limit: int | None = None) -> dict:
@@ -286,9 +315,41 @@ def process_run(owner_id: UUID, run_id: UUID, limit: int | None = None) -> dict:
 
     Returns `claimed`, `done`, `failed` (out of retries) and `skipped` (failed, will be retried). The first
     three plus `skipped` always add up to `claimed`. Results are stored by `_finish` as each job completes,
-    not returned: the caller has nothing left to persist.
+    not returned: the caller has nothing left to persist. `busy` is true, with nothing claimed, when this
+    process is already driving the run.
     """
-    summary: dict = {"claimed": 0, "done": 0, "failed": 0, "skipped": 0}
+    if not _begin(run_id):
+        return {"claimed": 0, "done": 0, "failed": 0, "skipped": 0, "busy": True}
+    try:
+        return _process_pass(owner_id, run_id, limit)
+    finally:
+        _driving.discard(run_id)
+
+
+def drive_run(owner_id: UUID, run_id: UUID) -> bool:
+    """Drive the run to its end on a background thread; False when it is already being driven.
+
+    The request that starts it returns at once, so no HTTP response waits minutes on provider calls
+    (one long submission took 145 s, measured 2026-11-10) and the page polls the run instead. Passes
+    repeat while they claim anything: a failing job runs out of attempts, a cancelled run has nothing
+    queued, so the loop ends.
+    """
+    if not _begin(run_id):
+        return False
+
+    def work() -> None:
+        try:
+            while _process_pass(owner_id, run_id, None)["claimed"]:
+                pass
+        finally:
+            _driving.discard(run_id)
+
+    threading.Thread(target=work, name=f"run-{run_id}", daemon=True).start()
+    return True
+
+
+def _process_pass(owner_id: UUID, run_id: UUID, limit: int | None) -> dict:
+    summary: dict = {"claimed": 0, "done": 0, "failed": 0, "skipped": 0, "busy": False}
     with db.tenant_tx(owner_id) as conn:
         _requeue_stale(conn, owner_id=owner_id, run_id=run_id)
         jobs = claim_jobs(
@@ -308,9 +369,11 @@ def process_run(owner_id: UUID, run_id: UUID, limit: int | None = None) -> dict:
                 (run_id, owner_id),
             )
     summary["claimed"] = len(jobs)
-    with _checkpointer() as saver:
-        for job in jobs:
-            _run_one(owner_id, job, summary, checkpointer=saver)
+    if jobs:
+        workers = min(get_settings().run_concurrency, len(jobs))
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            for outcome in pool.map(lambda job: _run_one(owner_id, job), jobs):
+                summary[outcome] += 1
     _settle_run(owner_id, run_id)
     return summary
 
@@ -318,14 +381,14 @@ def process_run(owner_id: UUID, run_id: UUID, limit: int | None = None) -> dict:
 def _settle_run(owner_id: UUID, run_id: UUID) -> None:
     """A run with nothing queued or running is finished — including when the command line drove it.
 
-    The API endpoint computed this for its own responses, so a run processed from a terminal said
-    `running` for as long as nobody called the API again. `status = 'running'` in the predicate keeps a
-    cancelled run cancelled, which is the whole point of cancelling it.
+    This is the only place a run becomes `done` and the only place `finished_at` is written for one:
+    the API endpoint used to stamp it after every pass, so a run still grading already carried a finish
+    time (seen 2026-11-10). The status predicate keeps a cancelled run cancelled.
     """
     with db.tenant_tx(owner_id) as conn, conn.cursor() as cur:
         cur.execute(
             "update runs set status = 'done', finished_at = coalesce(finished_at, now()) "
-            "where id = %s and owner_id = %s and status = 'running' "
+            "where id = %s and owner_id = %s and status in ('queued', 'running') "
             "and not exists ("
             "  select 1 from jobs where jobs.run_id = runs.id and jobs.status in ('queued', 'running')"
             ")",

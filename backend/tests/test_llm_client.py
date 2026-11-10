@@ -115,8 +115,8 @@ def test_request_is_configured_and_carries_the_schema_both_ways(monkeypatch):
     assert response_schema["name"] == "CognitiveResult"
     assert response_schema["strict"] is True
     assert response_schema["schema"] == CognitiveResult.model_json_schema()
-    # The prompt copy, for the free endpoints that ignore response_format.
-    assert '"level"' in body["messages"][1]["content"]
+    # The user turn goes out as given: the prompt copy of the schema is the caller's system turn.
+    assert body["messages"][1]["content"] == USER
     assert calls[0].headers["authorization"] == f"Bearer {CONFIGURED['LLM_API_KEY']}"
 
 

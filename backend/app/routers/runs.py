@@ -17,8 +17,8 @@ from psycopg.rows import dict_row
 from app import db
 from app.config import get_settings
 from app.ingest.identity_store import read_many as read_identities
+from app.jobs import worker
 from app.jobs.queue import enqueue_run
-from app.jobs.worker import process_run
 from app.llm.client import TOKENS_PER_SEGMENT
 from app.routers.auth import CurrentUser
 from app.schemas import (
@@ -31,6 +31,7 @@ from app.schemas import (
     SubmissionResultOut,
 )
 from app.security import require_csrf
+from scripts.seed_rubric import ensure_seeded
 
 router = APIRouter(tags=["runs"])
 
@@ -49,7 +50,7 @@ def _run_out(cur, run_id: uuid.UUID, *, processed: int = 0, failed: int = 0) -> 
     """
     run = cur.execute(
         "select id, status, mode, repetition_group, repetition_index, repetitions, final_evaluation, "
-        "model_unavailable from runs where id = %s",
+        "model_unavailable, created_at from runs where id = %s",
         (run_id,),
     ).fetchone()
     if run is None:
@@ -59,8 +60,8 @@ def _run_out(cur, run_id: uuid.UUID, *, processed: int = 0, failed: int = 0) -> 
     ).fetchall()
     needs_review = _count(
         cur.execute(
-            "select count(*) as n from submissions s join jobs j on j.submission_id = s.id "
-            "where j.run_id = %s and jsonb_array_length(s.review_flags) > 0",
+            "select count(*) as n from jobs j "
+            "where j.run_id = %s and jsonb_array_length(j.review_flags) > 0",
             (run_id,),
         ).fetchone()
     )
@@ -87,6 +88,8 @@ def _run_out(cur, run_id: uuid.UUID, *, processed: int = 0, failed: int = 0) -> 
         processed=processed,
         failed=failed,
         in_flight=in_flight,
+        busy=worker.is_driving(run_id),
+        created_at=run["created_at"],
     )
 
 
@@ -150,12 +153,18 @@ def create_run(
 
         # Two plain queries rather than one with a conditional predicate: which submissions a run covers
         # is the thing the lecturer just chose, and it should be readable here.
+        # A submission with no analysis text cannot be scored, so it is never queued: it used to fail
+        # three times over three passes for a reason no retry changes.
         ungraded_only = (
             "select s.id from submissions s where s.assignment_id = %s "
+            "and btrim(coalesce(s.student_analysis_text, '')) <> '' "
             "and not exists (select 1 from system_scores sc where sc.submission_id = s.id) "
             "order by s.created_at"
         )
-        every_submission = "select id from submissions where assignment_id = %s order by created_at"
+        every_submission = (
+            "select id from submissions where assignment_id = %s "
+            "and btrim(coalesce(student_analysis_text, '')) <> '' order by created_at"
+        )
         submissions = [
             row["id"]
             for row in cur.execute(
@@ -170,6 +179,7 @@ def create_run(
                 else "This assignment has no submissions to evaluate.",
             )
 
+        ensure_seeded(cur, user.id)
         # The newest version of each prompt and of the calibration, never every version ever seeded:
         # the worker reads the run's calibration from this list, and two calibration rows in it would
         # make that read pick one arbitrarily.
@@ -204,7 +214,10 @@ def create_run(
             created = cur.execute(
                 "insert into runs (owner_id, assignment_id, mode, model_config, rubric_version_id, "
                 "prompt_version_ids, status, repetition_group, repetition_index, repetitions, "
-                "final_evaluation) values (%s, %s, %s, %s, %s, %s, 'queued', %s, %s, %s, %s) "
+                # `clock_timestamp()`, not the default `now()`: the R runs of a group are inserted in
+                # one transaction and would share one `created_at`, leaving "the newest run" undefined.
+                "final_evaluation, created_at) "
+                "values (%s, %s, %s, %s, %s, %s, 'queued', %s, %s, %s, %s, clock_timestamp()) "
                 "returning id",
                 (
                     user.id,
@@ -236,26 +249,26 @@ def process_jobs(
     request: Request,
     user: CurrentUser,
     limit: Annotated[int, Query(ge=1, le=200)] = 10,
+    background: Annotated[bool, Query()] = False,
 ) -> RunOut:
-    """Run up to `limit` queued jobs. The worker stores each result as its job finishes, so a pass that is
-    interrupted — or cancelled — leaves exactly the submissions it completed, not an empty run."""
+    """Run this run's queued jobs. The worker stores each result as its job finishes, so a pass that is
+    interrupted — or cancelled — leaves exactly the submissions it completed, not an empty run.
+
+    `background=true` is what the screens use: the run is driven to its end on a server thread and this
+    call returns at once, so no response waits on provider calls and the page polls `GET /runs/{id}`.
+    Without it, up to `limit` jobs are run before the response (the tests and scripts rely on that).
+    Either way a run this process is already driving is not driven twice: the response says `busy`.
+    """
     require_csrf(request)
-    summary = process_run(user.id, run_id, limit=limit)
+    with db.tenant_tx(user.id) as conn, conn.cursor(row_factory=dict_row) as cur:
+        _run_out(cur, run_id)  # 404 before any work starts, and before a thread exists
+    summary: dict = {}
+    if background:
+        worker.drive_run(user.id, run_id)
+    else:
+        summary = worker.process_run(user.id, run_id, limit=limit)
 
     with db.tenant_tx(user.id) as conn, conn.cursor(row_factory=dict_row) as cur:
-        unfinished = _count(
-            cur.execute(
-                "select count(*) as n from jobs where run_id = %s and status in ('queued', 'running')",
-                (run_id,),
-            ).fetchone()
-        )
-        # A cancelled run stays cancelled: this pass may finish the submission it was already
-        # grading, but it must not relabel the run as running again.
-        cur.execute(
-            "update runs set status = %s, finished_at = now() "
-            "where id = %s and owner_id = %s and status <> 'cancelled'",
-            ("running" if unfinished else "done", run_id, user.id),
-        )
         return _run_out(
             cur, run_id, processed=summary.get("done", 0), failed=summary.get("failed", 0)
         )
@@ -308,7 +321,7 @@ def get_results(run_id: uuid.UUID, user: CurrentUser) -> RunResultsOut:
     with db.tenant_tx(user.id) as conn, conn.cursor(row_factory=dict_row) as cur:
         run = cur.execute(
             # The rubric row the run froze, for the readable name of each level code.
-            "select r.id, r.status, rv.descriptors "
+            "select r.id, r.status, rv.descriptors, rv.indicators "
             "from runs r left join rubric_versions rv on rv.id = r.rubric_version_id "
             "where r.id = %s",
             (run_id,),
@@ -317,7 +330,8 @@ def get_results(run_id: uuid.UUID, user: CurrentUser) -> RunResultsOut:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Run not found.")
 
         rows = cur.execute(
-            "select s.id as submission_id, s.pseudonym, s.review_flags, "
+            # The flags this run raised (0010), not the newest evaluation's.
+            "select s.id as submission_id, s.pseudonym, j.review_flags, "
             "       sc.dimension, sc.indicator, sc.level, sc.rationale, sc.id as score_id, "
             "       sc.distribution, "
             "       e.quote, e.start_offset, e.end_offset, "
@@ -332,7 +346,8 @@ def get_results(run_id: uuid.UUID, user: CurrentUser) -> RunResultsOut:
             "left join system_scores sc on sc.submission_id = s.id and sc.run_id = %s "
             "and sc.segment_index is null "
             "left join evidence e on e.system_score_id = sc.id "
-            "left join feedback f on f.submission_id = s.id "
+            # Feedback belongs to the run that wrote it (0009); a row from before that column is shown.
+            "left join feedback f on f.submission_id = s.id and (f.run_id is null or f.run_id = %s) "
             # The newest review per score, the same rule the detail view and the export use, so the preview
             # cannot disagree with the file it previews.
             "left join lateral ("
@@ -341,7 +356,7 @@ def get_results(run_id: uuid.UUID, user: CurrentUser) -> RunResultsOut:
             "  order by lr.reviewed_at desc limit 1"
             ") rv on true "
             "order by s.pseudonym, sc.dimension, sc.indicator",
-            (run_id, run_id),
+            (run_id, run_id, run_id),
         ).fetchall()
 
     names = read_identities({row["submission_id"] for row in rows}, user.id)
@@ -403,6 +418,7 @@ def get_results(run_id: uuid.UUID, user: CurrentUser) -> RunResultsOut:
         status=run["status"],
         submissions=list(submissions.values()),
         level_names=dict((run["descriptors"] or {}).get("levels") or {}),
+        indicators=list(run["indicators"] or []),
     )
 
 

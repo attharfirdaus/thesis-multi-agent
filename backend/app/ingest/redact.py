@@ -46,8 +46,11 @@ _EIGHT_DIGITS = re.compile(r"\b\d{8}\b")
 # (found live, 2026-10-17: the submission's own first sentence carried a capital "N" and was never
 # redacted) — but only the trigger, via the scoped `(?i:...)` group: the capture itself still
 # requires `[A-Z]`, because a name is exactly what the rest of this rule is trying to recognise.
+# A bare "oleh" is not a cue: "dikembangkan oleh International Organization for Standardization" lost
+# its subject to it on a real submission (2026-11-10). Only an authorship verb before it is.
 _NAMED_PERSON = re.compile(
-    r"\b(?i:nama saya|saya,|penulis|oleh)\s*:?\s*([A-Z][A-Za-z']*(?:\s+[A-Z][A-Za-z']*){1,3})"
+    r"\b(?i:nama saya|saya,|penulis|(?:disusun|dibuat|ditulis|dikerjakan) oleh)\s*:?\s*"
+    r"([A-Z][A-Za-z']*(?:\s+[A-Z][A-Za-z']*){1,3})"
 )
 
 _FORMAT_PATTERNS = (

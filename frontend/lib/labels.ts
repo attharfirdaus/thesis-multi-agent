@@ -93,9 +93,31 @@ export function levelLabel(level: string, levelNames: Record<string, string>): s
  */
 export function spreadLabel(distribution?: Record<string, number> | null): string {
   if (!distribution || Object.keys(distribution).length === 0) return "—";
+  // jsonb does not keep key order, so the seeded groups are put back in theirs.
+  const rank = (group: string) => {
+    const index = GROUP_ORDER.indexOf(group);
+    return index === -1 ? GROUP_ORDER.length : index;
+  };
   return Object.entries(distribution)
+    .sort(([a], [b]) => rank(a) - rank(b) || a.localeCompare(b, "id"))
     .map(([group, count]) => `${group.charAt(0).toUpperCase()}${group.slice(1)} ${count}`)
     .join(" · ");
+}
+
+const GROUP_ORDER = ["rendah", "menengah", "tinggi"];
+
+/** A rubric code as a heading: `orientasi` is stored lower-case, a column title is not. */
+export const indicatorLabel = (indicator: string): string =>
+  indicator.charAt(0).toUpperCase() + indicator.slice(1);
+
+/** Why one uploaded file was refused, in the lecturer's language (the stored text is English). */
+export function importError(error?: string | null): string {
+  if (!error) return "Berkas ini gagal dibaca.";
+  if (error.startsWith("This file duplicates")) return "Berkas ini sama dengan kiriman yang sudah ada, jadi tidak diimpor lagi.";
+  if (error.startsWith("No analysis text")) return "Tidak ada teks analisis yang dapat dibaca pada berkas ini.";
+  if (error.includes("unsupported file type")) return "Jenis berkas tidak didukung. Gunakan PDF, DOCX, TXT, atau ZIP.";
+  if (error.includes("larger than")) return "Berkas terlalu besar (maksimum 20 MB).";
+  return "Berkas ini gagal dibaca.";
 }
 
 /** What an extraction caveat says, in the lecturer's language (the stored text is English). */

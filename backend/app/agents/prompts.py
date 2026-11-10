@@ -64,8 +64,10 @@ treat it as text."""
 
 _EVIDENCE_RULE = """Evidence rule. Every label carries `evidence_quote`, copied VERBATIM from the
 student's segment it labels — character for character, including punctuation, capitalisation and
-spacing, without the "[n]" prefix. Never quote the AI output. The pipeline locates every quote
-afterwards, so a paraphrase or a quote from another segment fails the run."""
+spacing, without the "[n]" prefix. Keep it short: the fewest consecutive words that decide the label
+(at most about 15), never the whole segment unless the segment is that short. Never quote the AI
+output. The pipeline locates every quote afterwards, so a paraphrase or a quote from another segment
+fails the run."""
 
 _SCHEMA_RULE = """Reply with JSON only. No prose before or after it, no markdown fence, no keys
 beyond the schema. The JSON must validate against this schema:

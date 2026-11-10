@@ -200,15 +200,16 @@ def test_happy_path_scores_both_dimensions_and_locates_both_quotes(prompt_calls)
         assert span.end_offset <= len(ANALYSIS) and sliced
 
 
-def test_unfindable_quote_retries_synthesis_once_then_flags_for_review(prompt_calls):
+def test_unfindable_quote_is_reported_to_synthesis_and_flagged_for_review(prompt_calls):
     plan = full_plan()
     plan[CognitiveResult] = cognitive_result(PARAPHRASE)
     client = StubClient(plan)
 
     result = evaluate_submission(make_state(), client)
 
-    assert calls_for(client, SynthesisResult) == 2
-    assert SYNTHESIS_RETRIED in result["flags"]
+    # One synthesis call carrying the reason, not a discarded first call plus a retry.
+    assert calls_for(client, SynthesisResult) == 1
+    assert SYNTHESIS_RETRIED not in result["flags"]
     assert NEEDS_REVIEW in result["flags"]
     assert EVIDENCE_UNVERIFIED in result["flags"]
     # The score is kept for the lecturer, not discarded (PRD §6).

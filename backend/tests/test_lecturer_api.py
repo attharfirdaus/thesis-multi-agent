@@ -109,15 +109,14 @@ def test_create_assignment_uses_the_newest_rubric(seeded):
     assert detail["runs"] == []
 
 
-def test_create_assignment_without_a_rubric_is_a_409(client):
+def test_a_new_lecturer_gets_the_seeded_rubric_and_can_create_an_assignment(client):
     client.post("/auth/signup", json=OTHER_LECTURER)
     response = client.post(
         "/assignments", json={"title": "Tugas", "course": "MRTI"}, headers=_csrf(client)
     )
-    assert response.status_code == 409
-    assert response.json()["detail"] == (
-        "No rubric version is seeded for this account; run scripts/seed_rubric.py first."
-    )
+    assert response.status_code == 201, response.text
+    detail = client.get(f"/assignments/{response.json()['id']}").json()
+    assert detail["rubric_version"] == 1
 
 
 def test_detail_shows_the_latest_run_and_its_rubric(seeded):

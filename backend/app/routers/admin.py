@@ -19,6 +19,7 @@ from app.schemas import (
     AdminRunOut,
     AdminUserOut,
     PromptVersionOut,
+    RoleIn,
     RubricIn,
     RubricVersionOut,
     TraceOut,
@@ -43,6 +44,26 @@ def list_users(user: CurrentUser) -> list[AdminUserOut]:
             "select id, email, name, role, created_at from users order by created_at"
         ).fetchall()
     return [AdminUserOut(**row) for row in rows]
+
+
+@router.patch("/users/{user_id}/role", response_model=AdminUserOut)
+def set_role(user_id: uuid.UUID, payload: RoleIn, request: Request, user: CurrentUser) -> AdminUserOut:
+    """Make a user an admin or a lecturer. An admin cannot demote themselves, so the system never
+    ends up with nobody able to reach this screen."""
+    require_csrf(request)
+    _admin(user)
+    if user_id == user.id:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT, detail="You cannot change your own role."
+        )
+    with db.plain_tx() as conn, conn.cursor(row_factory=dict_row) as cur:
+        row = cur.execute(
+            "update users set role = %s where id = %s returning id, email, name, role, created_at",
+            (payload.role, user_id),
+        ).fetchone()
+    if row is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found.")
+    return AdminUserOut(**row)
 
 
 @router.get("/rubric", response_model=list[RubricVersionOut])

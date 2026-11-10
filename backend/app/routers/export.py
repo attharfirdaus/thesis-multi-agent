@@ -72,7 +72,7 @@ join submissions s on s.id = sc.submission_id
 join assignments a on a.id = r.assignment_id
 left join rubric_versions rv on rv.id = r.rubric_version_id
 left join evidence e on e.system_score_id = sc.id
-left join feedback f on f.submission_id = sc.submission_id
+left join feedback f on f.submission_id = sc.submission_id and (f.run_id is null or f.run_id = r.id)
 left join lateral (
     select action, new_level, reason, reviewed_at from lecturer_reviews
     where system_score_id = sc.id
@@ -89,7 +89,17 @@ def _stamp(value) -> str | None:
 
 def _spread(value: dict | None) -> str | None:
     """`{"rendah": 3, "menengah": 2}` as one cell: `rendah=3; menengah=2`."""
-    return None if not value else "; ".join(f"{name}={count}" for name, count in value.items())
+    return None if not value else "; ".join(f"{name}={count}" for name, count in _ordered(value))
+
+
+#: jsonb does not keep key order, so the seeded group names are put back in theirs; any other name
+#: (an edited rubric) follows alphabetically.
+_GROUP_ORDER = ("rendah", "menengah", "tinggi")
+
+
+def _ordered(value: dict) -> list[tuple[str, int]]:
+    rank = {name: index for index, name in enumerate(_GROUP_ORDER)}
+    return sorted(value.items(), key=lambda item: (rank.get(item[0], len(rank)), item[0]))
 
 
 def _cells(row: dict) -> list:

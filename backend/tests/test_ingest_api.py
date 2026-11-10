@@ -250,7 +250,8 @@ def test_an_unlabelled_document_falls_through_to_the_llm_and_the_result_is_store
         ).fetchone()
     assert stored["ai_output_text"] == ai_text
     assert stored["student_analysis_text"] == (
-        "Analisis saya terhadap definisi ini memerlukan konteks organisasi.\nNama : [REDACTED]"
+        # The identity line is redacted for the call and then dropped from the stored analysis.
+        "Analisis saya terhadap definisi ini memerlukan konteks organisasi."
     )
     assert NAME not in stored["ai_output_text"]
     assert NAME not in stored["student_analysis_text"]

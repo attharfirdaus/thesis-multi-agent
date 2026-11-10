@@ -59,7 +59,31 @@ const MESSAGES_ID: Record<string, string> = {
   "Baseline, repeated and final-evaluation runs are admin operations.":
     "Mode baseline, pengulangan, dan evaluasi akhir hanya dapat dijalankan admin.",
   "A comment cannot be empty.": "Komentar tidak boleh kosong.",
+  "Password must be at least 10 characters.": "Kata sandi minimal 10 karakter.",
+  "This assignment has no submissions to evaluate.": "Tugas ini belum memiliki kiriman yang dapat dinilai.",
+  "This run has already finished.": "Penilaian ini sudah selesai.",
+  "This assignment is still being graded; stop the run first.":
+    "Tugas ini masih dinilai. Hentikan penilaian terlebih dahulu.",
+  "You cannot change your own role.": "Anda tidak dapat mengubah peran Anda sendiri.",
+  "User not found.": "Pengguna tidak ditemukan.",
 };
+
+/** The message for an error body: a known sentence, a recognisable shape, or the generic line. */
+function errorMessage(detail: unknown): string {
+  if (typeof detail === "string") {
+    if (MESSAGES_ID[detail]) return MESSAGES_ID[detail];
+    if (detail.startsWith("new_level must be one of")) return "Tingkat yang dipilih tidak ada di dalam rubrik.";
+    if (detail.startsWith("analysis_start is past")) return "Batas pemisahan berada di luar teks.";
+  }
+  // FastAPI's validation errors arrive as a list naming the field that failed.
+  if (Array.isArray(detail)) {
+    const fields = detail.map((item) => String(item?.loc?.[item.loc.length - 1] ?? ""));
+    if (fields.includes("email")) return "Alamat email tidak valid.";
+    if (fields.includes("password")) return "Kata sandi tidak valid.";
+    return "Isian belum lengkap atau tidak valid. Periksa kembali lalu coba lagi.";
+  }
+  return "Terjadi kesalahan. Coba lagi.";
+}
 
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   const response = await fetch(`${API_BASE}${path}`, {
@@ -76,8 +100,7 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   if (!response.ok) {
     let message = "Terjadi kesalahan. Coba lagi.";
     try {
-      const body = await response.json();
-      if (typeof body?.detail === "string") message = MESSAGES_ID[body.detail] ?? message;
+      message = errorMessage((await response.json())?.detail);
     } catch {
       // non-JSON error body; keep the generic message
     }
@@ -111,7 +134,16 @@ export type RunSummary = {
   final_evaluation?: boolean;
   /** The provider no longer serves the model the run snapshotted (KNF-04). */
   model_unavailable?: boolean;
+  /** The server is driving this run right now; with work left and `busy` false it needs a process call. */
+  busy?: boolean;
+  created_at?: string | null;
 };
+
+const TERMINAL_RUN_STATUS = ["done", "failed", "cancelled"];
+
+/** Whether the queue still owns a job of this run. */
+export const runPending = (run: RunSummary): boolean =>
+  !TERMINAL_RUN_STATUS.includes(run.status) && (run.jobs.queued ?? 0) + (run.jobs.running ?? 0) > 0;
 
 export type AssignmentSummary = {
   id: string;
@@ -201,6 +233,10 @@ export type SubmissionDetail = {
   run: { id: string; status: string; mode: string } | null;
   scores: Score[];
   segment_scores?: SegmentScore[];
+  /** The synthesis step's explanation of the scores and the mismatches it reported. */
+  synthesis?: { rationale: string; inconsistencies: string[] } | null;
+  /** Quotes an agent gave that are not in the segment they label (the "kutipan tidak ditemukan" flag). */
+  unlocated_quotes?: { source: "cognitive" | "metacognitive"; segment: number; quote: string }[];
   feedback: Feedback | null;
   reviews: Review[];
   exclusion_reason?: ExclusionReason | null;
@@ -255,6 +291,8 @@ export type ImportResult = { assignment_id: string; files: ImportedFile[] };
 export type RunResults = {
   run_id: string;
   status: string;
+  /** The run's rubric indicators, in the rubric's order. */
+  indicators?: string[];
   /** The run's frozen rubric levels, by code. Empty for a rubric that carried no names. */
   level_names: Record<string, string>;
   submissions: {
@@ -305,6 +343,11 @@ export const api = {
 
   getAssignment: (id: string) => request<AssignmentDetail>(`/assignments/${id}`),
 
+  updateAssignment: (id: string, body: { title: string; course: string; prompt_text: string }) =>
+    request<AssignmentSummary>(`/assignments/${id}`, { method: "PATCH", body: JSON.stringify(body) }),
+
+  deleteAssignment: (id: string) => request<void>(`/assignments/${id}`, { method: "DELETE" }),
+
   uploadSubmissions: (assignmentId: string, files: File[]) => {
     const form = new FormData();
     for (const file of files) form.append("files", file);
@@ -314,7 +357,12 @@ export const api = {
     });
   },
 
-  getSubmission: (id: string) => request<SubmissionDetail>(`/submissions/${id}`),
+  /** `runId` names the run whose scores to show; without it the newest run that scored the submission. */
+  getSubmission: (id: string, runId?: string | null) =>
+    request<SubmissionDetail>(`/submissions/${id}${runId ? `?run=${runId}` : ""}`),
+
+  acceptAll: (submissionId: string, runId: string) =>
+    request<{ accepted: number }>(`/submissions/${submissionId}/accept-all?run=${runId}`, { method: "POST" }),
 
   deleteSubmission: (id: string) => request<void>(`/submissions/${id}`, { method: "DELETE" }),
 
@@ -335,8 +383,9 @@ export const api = {
       { method: "POST" },
     ),
 
-  processRun: (runId: string, limit: number, signal?: AbortSignal) =>
-    request<RunSummary>(`/runs/${runId}/process?limit=${limit}`, { method: "POST", signal }),
+  /** Ask the server to drive the run to its end. Returns at once; follow it with `getRun`. */
+  processRun: (runId: string) =>
+    request<RunSummary>(`/runs/${runId}/process?background=true`, { method: "POST" }),
 
   getRun: (runId: string) => request<RunSummary>(`/runs/${runId}`),
 
@@ -373,6 +422,8 @@ export const api = {
         llm: Record<string, unknown>;
         prompt_versions: { id: string; agent_name: string; version: number; frozen_at: string | null }[];
       }>("/admin/config"),
+    setRole: (userId: string, role: string) =>
+      request<unknown>(`/admin/users/${userId}/role`, { method: "PATCH", body: JSON.stringify({ role }) }),
     runs: () => request<AdminRun[]>("/admin/runs"),
     traces: (runId: string) => request<Trace[]>(`/admin/runs/${runId}/traces`),
   },
@@ -383,3 +434,31 @@ export const api = {
       body: JSON.stringify({ edited_text: editedText }),
     }),
 };
+
+const POLL_MS = 3000;
+
+/**
+ * Start a run on the server and watch it until nothing is left to do. The server does the grading on
+ * its own thread, so this only polls: leaving the page stops the watching, not the run, and a second
+ * watcher never starts a second grader. A run that has work left and nobody driving it (the server was
+ * restarted) is started again, a bounded number of times.
+ */
+export async function driveRun(
+  runId: string,
+  onUpdate: (run: RunSummary) => void,
+  watching: () => boolean = () => true,
+): Promise<RunSummary> {
+  let run = await api.processRun(runId);
+  onUpdate(run);
+  let restarts = 0;
+  while (watching() && runPending(run)) {
+    await new Promise((resolve) => setTimeout(resolve, POLL_MS));
+    run = await api.getRun(runId);
+    onUpdate(run);
+    if (runPending(run) && !run.busy) {
+      if (++restarts > 3) break;
+      run = await api.processRun(runId);
+    }
+  }
+  return run;
+}

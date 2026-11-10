@@ -26,3 +26,5 @@ samples/
 # Real student identifiers, held outside Neon on purpose (DECISIONS.md, 2026-10-16) — never committed.
 backend/data/
 backend/.pytest_identities.db
+
+BAB*.pdf

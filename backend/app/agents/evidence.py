@@ -27,6 +27,23 @@ _SOFT_HYPHEN = "\u00ad"
 _LINE_BREAK_HYPHENS = "-\u2010\u2011\u00ad"
 
 
+def _loose_view(text: str) -> tuple[str, list[int]]:
+    """Letters and digits only, case-folded, with each one's original index.
+
+    The fallback comparison: a model copying a sentence drops a hyphen at a line break the student's
+    file kept, or adds a comma (both seen live, 2026-11-10). The words and their order are still the
+    student's, and the span returned is cut from the original text, so nothing is invented.
+    """
+    out: list[str] = []
+    origin: list[int] = []
+    for position, char in enumerate(text):
+        if char.isalnum():
+            folded = char.casefold()
+            out.extend(folded)
+            origin.extend([position] * len(folded))
+    return "".join(out), origin
+
+
 def _view(text: str) -> tuple[str, list[int]]:
     """`text` as comparison text, plus the original index of every character in it.
 
@@ -86,7 +103,13 @@ def locate_quote(text: str, quote: str) -> tuple[int, int] | None:
     haystack, origin = _view(text)
     found = haystack.find(needle)
     if found < 0:
-        return None
+        # Same words in the same order, punctuation and spacing aside. Short needles are refused: a
+        # few letters match by accident once punctuation is gone.
+        needle = _loose_view(quote)[0]
+        haystack, origin = _loose_view(text)
+        found = haystack.find(needle) if len(needle) >= 12 else -1
+        if found < 0:
+            return None
     # The last needle character's original index plus one, so `text[start:end]` covers the whole
     # match including any character whose case folding expanded into several comparison characters.
     return origin[found], origin[found + len(needle) - 1] + 1

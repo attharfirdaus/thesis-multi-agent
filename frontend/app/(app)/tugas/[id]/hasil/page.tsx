@@ -4,14 +4,14 @@ import { Fragment, useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 
-import { AdminOnly, AppShell } from "@/components/app-shell";
+import { AdminOnly } from "@/components/app-shell";
 import { StatusBadge, runStatus } from "@/components/status-badge";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Label } from "@/components/ui/label";
 import { API_BASE, api, type AssignmentDetail, type RunResults } from "@/lib/api";
-import { levelLabel, modeLabel, scoreLevel, spreadLabel, submissionLabel } from "@/lib/labels";
+import { indicatorLabel, levelLabel, modeLabel, scoreLevel, spreadLabel, submissionLabel } from "@/lib/labels";
 
 type SortKey = "pseudonym" | "level" | "review";
 
@@ -24,6 +24,8 @@ type Row = {
   spread: string;
   indicators: Record<string, string>;
   flagged: boolean;
+  /** Every score of the submission carries a lecturer review. */
+  reviewed: boolean;
   /** The source submission, so the preview shows exactly what the export is built from. */
   source: RunResults["submissions"][number];
 };
@@ -114,16 +116,17 @@ export default function HasilPage() {
   const [ascending, setAscending] = useState(true);
   const [levelFilter, setLevelFilter] = useState("");
   const [expandedId, setExpandedId] = useState<string | null>(null);
+  // The run on screen. FR-09 opens on the newest; any earlier run — and the baseline — can be chosen,
+  // because a run that graded only the new submissions shows only those.
+  const [runId, setRunId] = useState<string | null>(null);
 
   const load = useCallback(
     () =>
       api
         .getAssignment(id)
-        .then(async (data) => {
+        .then((data) => {
           setDetail(data);
-          // FR-09 reads the newest run; an older run stays available through the export of its own id.
-          const newest = data.runs[0];
-          setResults(newest ? await api.getRunResults(newest.id) : null);
+          setRunId((current) => current ?? data.runs[0]?.id ?? null);
         })
         .catch((err: unknown) => setError(err instanceof Error ? err.message : "Gagal memuat hasil.")),
     [id],
@@ -133,7 +136,23 @@ export default function HasilPage() {
     void load();
   }, [load]);
 
-  const run = detail?.runs[0] ?? null;
+  useEffect(() => {
+    if (runId === null) return;
+    let active = true;
+    api.getRunResults(runId).then(
+      (data) => {
+        if (active) setResults(data);
+      },
+      (err: unknown) => {
+        if (active) setError(err instanceof Error ? err.message : "Gagal memuat hasil.");
+      },
+    );
+    return () => {
+      active = false;
+    };
+  }, [runId]);
+
+  const run = detail?.runs.find((item) => item.id === runId) ?? null;
   const scores = results?.submissions ?? [];
   const levelNames = results?.level_names ?? {};
 
@@ -150,11 +169,13 @@ export default function HasilPage() {
       spread: spreadLabel(submission.scores.find((score) => score.dimension === "cognitive")?.distribution),
       indicators,
       flagged: (submission.review_flags ?? []).length > 0,
+      reviewed: submission.scores.length > 0 && submission.scores.every((score) => score.review !== null),
       source: submission,
     };
   });
 
-  const indicatorColumns: string[] = [];
+  // The rubric's own order first; anything a row carries beyond it (an older rubric) follows.
+  const indicatorColumns: string[] = [...(results?.indicators ?? [])];
   for (const row of rows) {
     for (const indicator of Object.keys(row.indicators)) {
       if (!indicatorColumns.includes(indicator)) indicatorColumns.push(indicator);
@@ -203,7 +224,7 @@ export default function HasilPage() {
   );
 
   return (
-    <AppShell>
+    <>
       {detail === null ? (
         <p className="text-muted-foreground">Memuat…</p>
       ) : (
@@ -252,7 +273,31 @@ export default function HasilPage() {
                     </Button>
                   </div>
                   <p className="flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
-                    Status penilaian: <StatusBadge {...runStatus(run.status)} />
+                    <Label htmlFor="run_select" className="text-sm font-normal text-muted-foreground">
+                      Penilaian yang ditampilkan:
+                    </Label>
+                    <select
+                      id="run_select"
+                      value={run.id}
+                      onChange={(event) => {
+                        setExpandedId(null);
+                        setRunId(event.target.value);
+                      }}
+                      className="h-8 rounded-lg border border-input bg-transparent px-2 text-sm text-foreground outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
+                    >
+                      {detail.runs.map((item, index) => {
+                        const jobs = Object.values(item.jobs).reduce((sum, count) => sum + count, 0);
+                        const when = item.created_at
+                          ? new Date(item.created_at).toLocaleString("id-ID", { dateStyle: "medium", timeStyle: "short" })
+                          : `Penilaian ${detail.runs.length - index}`;
+                        return (
+                          <option key={item.id} value={item.id}>
+                            {when} · {jobs} kiriman{index === 0 ? " (terbaru)" : ""}
+                          </option>
+                        );
+                      })}
+                    </select>
+                    <StatusBadge {...runStatus(run.status)} />
                     {/* The mode names the agents, a technical term kept to the admin area (Bab III.3). */}
                     {run.mode ? (
                       <AdminOnly>
@@ -325,7 +370,7 @@ export default function HasilPage() {
                     </p>
                   ) : (
                     <div className="overflow-x-auto">
-                      <table className="w-full border-collapse text-left">
+                      <table className="w-full min-w-[720px] border-collapse text-left">
                         <thead>
                           <tr className="border-b">
                             {sortableHeader("pseudonym", "Pseudonim")}
@@ -335,7 +380,7 @@ export default function HasilPage() {
                             </th>
                             {indicatorColumns.map((indicator) => (
                               <th key={indicator} scope="col" className="py-2 pr-4 font-medium">
-                                {indicator}
+                                {indicatorLabel(indicator)}
                               </th>
                             ))}
                             {sortableHeader("review", "Tinjauan")}
@@ -348,12 +393,12 @@ export default function HasilPage() {
                           {visible.map((row) => (
                             <Fragment key={row.id}>
                               <tr
-                                onClick={() => router.push(`/kiriman/${row.id}`)}
+                                onClick={() => router.push(`/kiriman/${row.id}?run=${run.id}`)}
                                 className="cursor-pointer border-b hover:bg-muted/60"
                               >
                                 <td className="py-2 pr-4">
                                   <Link
-                                    href={`/kiriman/${row.id}`}
+                                    href={`/kiriman/${row.id}?run=${run.id}`}
                                     className="underline underline-offset-4 hover:text-foreground"
                                   >
                                     {submissionLabel(row.pseudonym, row.real_name)}
@@ -373,8 +418,10 @@ export default function HasilPage() {
                                 <td className="py-2 pr-4">
                                   {row.flagged ? (
                                     <StatusBadge tone="amber" label="Perlu Ditinjau" />
+                                  ) : row.reviewed ? (
+                                    <StatusBadge tone="green" label="Sudah ditinjau" />
                                   ) : (
-                                    <span className="text-muted-foreground">Sesuai</span>
+                                    <span className="text-muted-foreground">Belum ditinjau</span>
                                   )}
                                 </td>
                                 <td className="py-2 pl-4">
@@ -417,6 +464,6 @@ export default function HasilPage() {
           )}
         </>
       )}
-    </AppShell>
+    </>
   );
 }

@@ -3,7 +3,6 @@
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 
-import { AppShell } from "@/components/app-shell";
 import { StatusBadge, runStatus } from "@/components/status-badge";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
@@ -61,7 +60,7 @@ export default function DasborPage() {
   }
 
   return (
-    <AppShell>
+    <>
       <header className="flex flex-wrap items-start justify-between gap-4">
         <div>
           <h1 className="text-2xl font-semibold">Dasbor</h1>
@@ -178,6 +177,6 @@ export default function DasborPage() {
           })}
         </ul>
       )}
-    </AppShell>
+    </>
   );
 }

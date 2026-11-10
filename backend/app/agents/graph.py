@@ -13,9 +13,8 @@ Three rules are visible in the code below, and they are the reason it is shaped 
 - A quote that cannot be found is not a quote. The evidence node locates every claimed quote in the
   stored text before the caller persists anything, so an unverifiable score is flagged for review
   instead of being presented as grounded.
-- Retry once, then keep the score. PRD §6: an unverified quote sends synthesis back once with the
-  reason; if it is still unverifiable, the score is stored with a `needs_review` flag rather than
-  discarded.
+- Keep the score, flag it. PRD §6: synthesis is told which quotes could not be located, and the score is
+  stored with a `needs_review` flag rather than discarded.
 
 Every key a node returns MUST exist on `GraphState` (app/agents/models.py): LangGraph 1.2 discards an
 update for an undeclared key silently, so a mistyped key looks like a node that ran and produced
@@ -344,10 +343,22 @@ def _synthesise(
 
 def _synthesis_node(client: ProviderClient | None) -> Callable[[GraphState], dict[str, Any]]:
     def node(state: GraphState) -> dict[str, Any]:
+        if state.get("cognitive") is None and state.get("metacognitive") is None:
+            # Nothing was labelled, so there is nothing to explain: a call here returned feedback
+            # written from two empty objects and the job then counted as done (seen 2026-11-10).
+            return {
+                "synthesis": None,
+                **_failure(SYNTHESIS_FAILED, RuntimeError("both analysis agents failed")),
+            }
+        # One call, not two. Which quotes cannot be located is known before synthesis starts, so the
+        # reason PRD §6 sends back with the retry goes into the only call: the first one's answer was
+        # always discarded, and no synthesis call can make another agent's quote findable.
         unverified = _unverified(state)
         started = time.monotonic()
         try:
-            synthesis, latency, user = _synthesise(state, client, retry_reason=None)
+            synthesis, latency, user = _synthesise(
+                state, client, retry_reason="; ".join(unverified) or None
+            )
         except ModelUnavailable:
             raise
         except Exception as exc:
@@ -357,37 +368,17 @@ def _synthesis_node(client: ProviderClient | None) -> Callable[[GraphState], dic
                 **_failure(SYNTHESIS_FAILED, exc),
             }
 
-        flags: list[str] = []
-        errors: list[str] = []
-        if unverified:
-            flags.append(SYNTHESIS_RETRIED)
-            try:
-                # On a failed retry `synthesis` and `latency` keep the first call's values: that call's
-                # result is the one that gets stored, so its latency is the one the trace should show.
-                synthesis, latency, user = _synthesise(
-                    state, client, retry_reason="; ".join(unverified)
-                )
-            except ModelUnavailable:
-                raise
-            except Exception as exc:
-                # The first synthesis is kept: a failed retry must not cost a usable explanation.
-                errors = [f"synthesis retry failed: {exc!r}"]
-            # The retry can annotate the failure, it cannot make an agent's quote findable, so the
-            # score is stored unverified and sent to the lecturer (PRD §6).
+        # An unlocated quote or a rationale that does not match its quote is a reason to look, never a
+        # reason to change a label: the synthesis agent does not re-score (Bab III.4, III.8).
+        flags = [SYNTHESIS_INCONSISTENCY] if synthesis.inconsistencies else []
+        if unverified or synthesis.inconsistencies:
             flags.append(NEEDS_REVIEW)
-        if synthesis.inconsistencies:
-            # A rationale that does not match its own quote is a reason to look, not to discard the
-            # label: the synthesis agent never changes a label (Bab III.4, III.8).
-            flags.extend([SYNTHESIS_INCONSISTENCY, NEEDS_REVIEW])
-        update: dict[str, Any] = {
+        return {
             "synthesis": synthesis,
             "flags": flags,
             "latencies": {"synthesis": latency},
             "inputs": {"synthesis": user},
         }
-        if errors:
-            update["errors"] = errors
-        return update
 
     return node
 
@@ -489,12 +480,16 @@ def evaluate_submission(
     completed step rather than paying for the whole pipeline again. Without one the graph still runs — the
     caller then has job-level retry only, which is what the unit tests use.
 
-    The checkpoint thread is the *run and submission*, not the submission alone. A checkpoint carries a
-    run's channel values forward, and `flags`/`errors`/`latencies` merge rather than overwrite, so reusing
-    the submission id meant a second run resumed the first run's state: a `cognitive_agent_failed` from a
-    run whose call timed out stuck to a submission the next run scored fine, and the lecturer kept reading
-    "Perlu ditinjau" next to a score that existed (seen live, 2026-10-16). Within one run the same thread
-    still resumes an interrupted submission, which is what the checkpointer is for.
+    The checkpoint thread is the *run and submission*. Three cases, because `invoke(state)` on a thread
+    that already holds a checkpoint does not resume it — it starts again and merges the old `flags` and
+    `errors` into the new attempt, which is how a submission scored fine on its second attempt kept
+    reading "three agents failed" (seen 2026-11-10):
+
+    - the thread stopped mid-graph (a crash, or a node that raised): resume with `invoke(None)`, so only
+      the steps that did not finish are paid for again;
+    - the thread holds a finished earlier attempt: drop it and start clean;
+    - the graph ran to its end: drop the thread. A finished checkpoint has nothing left to resume, and
+      it is a second copy of the student's text that deleting the submission would not reach.
 
     `state["mode"]` picks the graph (FR-15); state built before the baseline existed carries no mode
     at all, so a missing key still means the multi-agent path it always meant.
@@ -504,9 +499,14 @@ def evaluate_submission(
         build = _GRAPH_BUILDERS[mode]
     except KeyError:
         raise ValueError(f"unknown run mode {mode!r}") from None
-    config = (
-        {"configurable": {"thread_id": f"{state['run_id']}:{state['submission_id']}"}}
-        if checkpointer
-        else None
-    )
-    return build(client=client, checkpointer=checkpointer).invoke(state, config)
+    graph = build(client=client, checkpointer=checkpointer)
+    if not checkpointer:
+        return graph.invoke(state)
+    thread_id = f"{state['run_id']}:{state['submission_id']}"
+    config = {"configurable": {"thread_id": thread_id}}
+    interrupted = bool(graph.get_state(config).next)
+    if not interrupted:
+        checkpointer.delete_thread(thread_id)
+    result = graph.invoke(None if interrupted else state, config)
+    checkpointer.delete_thread(thread_id)
+    return result

@@ -193,13 +193,14 @@ class StubClient:
         return Completion(parsed=payload, raw=json.dumps(payload.model_dump()), latency_ms=7, attempts=1)
 
 
-def build_submission_docx() -> bytes:
+def build_submission_docx(extra: str = "") -> bytes:
+    """`extra` is appended to the analysis: an identical second upload is refused as a duplicate."""
     document = docx.Document()
     table = document.add_table(rows=0, cols=2)
     for label, content in [
         ("Prompt", "Apa perbedaan COSO dan ISO 31000?"),
         ("Hasil", "COSO adalah kerangka pengendalian internal; ISO 31000 adalah panduan manajemen risiko."),
-        ("Critical Review", ANALYSIS),
+        ("Critical Review", ANALYSIS + extra),
     ]:
         row = table.add_row().cells
         row[0].text = label

@@ -120,6 +120,8 @@ class RunResultsOut(BaseModel):
     run_id: UUID
     status: str
     submissions: list[SubmissionResultOut] = Field(default_factory=list)
+    #: The run's rubric indicators in the rubric's own order, for the table's columns.
+    indicators: list[str] = Field(default_factory=list)
     #: Same map as `RubricOut.level_names`, for the run the results came from: the results table names a
     #: level ("C4 Analyze") without a second request per row.
     level_names: dict[str, str] = Field(default_factory=dict)
@@ -154,6 +156,10 @@ class RunOut(BaseModel):
     processed: int = 0
     failed: int = 0
     in_flight: list[InFlightOut] = Field(default_factory=list)
+    #: This API process is driving the run right now. A run with work left and `busy` false needs a
+    #: `process` call; one with `busy` true only needs watching.
+    busy: bool = False
+    created_at: dt.datetime | None = None
 
 
 # --------------------------------------------------------------- lecturer UI (phase 5)
@@ -285,6 +291,25 @@ class FeedbackPatch(BaseModel):
     edited_text: str | None = None
 
 
+class SynthesisOut(BaseModel):
+    """The synthesis step's explanation of the scores, and the mismatches it reported."""
+
+    rationale: str
+    inconsistencies: list[str] = Field(default_factory=list)
+
+
+class UnlocatedQuoteOut(BaseModel):
+    """A quote an agent gave that is not in the segment it labels (the `evidence_unverified` flag)."""
+
+    source: Literal["cognitive", "metacognitive"]
+    segment: int
+    quote: str
+
+
+class AcceptAllOut(BaseModel):
+    accepted: int
+
+
 class SubmissionDetailOut(BaseModel):
     id: UUID
     # The detail screen is reached from a results table and has to be able to link back to its
@@ -302,6 +327,8 @@ class SubmissionDetailOut(BaseModel):
     run: RunRefOut | None = None
     scores: list[SubmissionScoreOut] = Field(default_factory=list)
     segment_scores: list[SegmentScoreOut] = Field(default_factory=list)
+    synthesis: SynthesisOut | None = None
+    unlocated_quotes: list[UnlocatedQuoteOut] = Field(default_factory=list)
     feedback: FeedbackOut | None = None
     reviews: list[ReviewOut] = Field(default_factory=list)
     exclusion_reason: ExclusionReason | None = None
@@ -322,6 +349,10 @@ class AdminUserOut(BaseModel):
     name: str
     role: Literal["lecturer", "admin"]
     created_at: dt.datetime
+
+
+class RoleIn(BaseModel):
+    role: Literal["lecturer", "admin"]
 
 
 class RubricVersionOut(BaseModel):

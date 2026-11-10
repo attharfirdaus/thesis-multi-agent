@@ -2,14 +2,14 @@
 
 import { useCallback, useEffect, useState } from "react";
 
-import { AppShell, useCurrentUser } from "@/components/app-shell";
+import { useCurrentUser } from "@/components/app-shell";
 import { StatusBadge, runStatus } from "@/components/status-badge";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { api, type AdminRun, type AssignmentSummary, type RubricVersion, type Trace } from "@/lib/api";
+import { api, driveRun, type AdminRun, type AssignmentSummary, type RubricVersion, type Trace } from "@/lib/api";
 import { modeLabel } from "@/lib/labels";
 
 /**
@@ -18,11 +18,7 @@ import { modeLabel } from "@/lib/labels";
  * run log, and the user list. Technical terms are allowed here and nowhere else.
  */
 export default function AdminPage() {
-  return (
-    <AppShell>
-      <AdminArea />
-    </AppShell>
-  );
+  return <AdminArea />;
 }
 
 const TEXTAREA_CLASS =
@@ -130,11 +126,9 @@ function AdminArea() {
       );
       const ids = created.group_run_ids?.length ? created.group_run_ids : [created.id];
       for (const [index, runId] of ids.entries()) {
-        for (;;) {
-          const run = await api.processRun(runId, 5);
-          setProgress(`Pengulangan ${index + 1} dari ${ids.length}: ${run.jobs.done ?? 0} kiriman selesai`);
-          if (!run.jobs.queued && !run.jobs.running) break;
-        }
+        await driveRun(runId, (run) =>
+          setProgress(`Pengulangan ${index + 1} dari ${ids.length}: ${run.jobs.done ?? 0} kiriman selesai`),
+        );
       }
       setNote(`${ids.length} run selesai dijalankan.`);
     } catch (err) {
@@ -142,6 +136,18 @@ function AdminArea() {
     } finally {
       setProgress(null);
       await load();
+    }
+  }
+
+  async function onSetRole(userId: string, role: string) {
+    setError(null);
+    setNote(null);
+    try {
+      await api.admin.setRole(userId, role);
+      setNote("Peran pengguna diperbarui.");
+      await load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Gagal mengubah peran.");
     }
   }
 
@@ -374,8 +380,20 @@ function AdminArea() {
         <CardContent>
           <ul className="text-sm">
             {users.map((u) => (
-              <li key={u.id}>
-                {u.name} — {u.email} ({u.role})
+              <li key={u.id} className="flex flex-wrap items-center gap-2 py-1">
+                <span>
+                  {u.name} — {u.email}
+                </span>
+                <select
+                  aria-label={`Peran ${u.name}`}
+                  value={u.role}
+                  disabled={u.id === user?.id}
+                  onChange={(event) => void onSetRole(u.id, event.target.value)}
+                  className="h-7 rounded-lg border border-input bg-background px-2 text-sm"
+                >
+                  <option value="lecturer">Dosen</option>
+                  <option value="admin">Admin</option>
+                </select>
               </li>
             ))}
           </ul>

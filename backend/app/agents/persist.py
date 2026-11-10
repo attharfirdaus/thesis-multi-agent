@@ -20,6 +20,7 @@ belongs to a score. Synthesis produces no quote at all — its output *is* the e
 admits only the two scoring agents.
 """
 
+import re
 from typing import Any
 from uuid import UUID
 
@@ -31,6 +32,17 @@ from app.agents.segments import Segment, distribution, highest_level
 
 NEEDS_REVIEW = "needs_review"
 PRESENT, ABSENT = "present", "absent"
+
+
+_FAILURE = re.compile(r"(\w+)\[(\d+)\]: (.*)", re.DOTALL)
+
+
+def _unlocated(failures: list[str]) -> list[dict[str, Any]]:
+    """The evidence node's `source[segment]: quote` lines as `{source, segment, quote}`."""
+    matches = (_FAILURE.fullmatch(failure) for failure in failures)
+    return [
+        {"source": m.group(1), "segment": int(m.group(2)), "quote": m.group(3)} for m in matches if m
+    ]
 
 
 def _insert_score(
@@ -106,12 +118,6 @@ def persist_submission_result(
     ids: dict[str, Any] = {"owner_id": owner_id, "run_id": run_id, "submission_id": submission_id}
 
     with conn.cursor() as cur:
-        # A baseline run produces no feedback (FR-15) and must not touch what a multi-agent run on the
-        # same submission already wrote: `feedback` is keyed by submission, not by run, so deleting it
-        # here would erase a real result the lecturer can still see and edit, for a mode that has nothing
-        # to replace it with.
-        if state.get("mode") != "single_agent":
-            cur.execute("delete from feedback where submission_id = %s", (submission_id,))
         cur.execute(
             "delete from system_scores where run_id = %s and submission_id = %s",
             (run_id, submission_id),
@@ -150,7 +156,11 @@ def persist_submission_result(
                     # The client's own measurement, carried in the state (PRD §10 AgentTrace): a free
                     # provider's latency is the app's evidence for the performance target in PRD §11.
                     latencies.get(agent),
-                    None if payload is not None else "agent did not produce output",
+                    # Why it failed, not only that it did: the reasons were collected in the state and
+                    # then dropped, so the run log could never say "timeout" or "rate limited".
+                    None
+                    if payload is not None
+                    else "; ".join(state.get("errors", [])) or "agent did not produce output",
                 ),
             )
             counts["traces"] += 1
@@ -233,19 +243,37 @@ def persist_submission_result(
                 counts["scores"] += 1
 
         if isinstance(synthesis, SynthesisResult):
-            cur.execute(
-                "insert into feedback (owner_id, submission_id, generated_text) values (%s, %s, %s)",
-                (owner_id, submission_id, synthesis.feedback_text),
-            )
+            # One feedback row per submission, updated in place. A re-run replaces the generated text and
+            # says which run wrote it, and leaves `edited_text` alone: deleting the row here erased the
+            # lecturer's edit on every re-grade (seen 2026-11-10). A baseline run writes none (FR-15), so
+            # it never reaches this branch and never touches a multi-agent run's feedback.
+            updated = cur.execute(
+                "update feedback set generated_text = %s, run_id = %s where submission_id = %s",
+                (synthesis.feedback_text, run_id, submission_id),
+            ).rowcount
+            if not updated:
+                cur.execute(
+                    "insert into feedback (owner_id, submission_id, run_id, generated_text) "
+                    "values (%s, %s, %s, %s)",
+                    (owner_id, submission_id, run_id, synthesis.feedback_text),
+                )
             # The synthesis rationale is NOT copied onto a score: a score's rationale belongs to the
             # agent that produced the score (FR-14), and the synthesis agent explains the submission as
             # a whole. It is already persisted verbatim in its AgentTrace row, which is where the
             # submission detail view reads it from.
 
-        flags = list(state.get("flags", []))
+        flags = list(dict.fromkeys(state.get("flags", [])))  # each reason once, in order
         cur.execute(
             "update submissions set review_flags = %s where id = %s",
             (Jsonb(flags), submission_id),
+        )
+        # The same flags at their own grain — this submission in this run (0010) — with the quotes the
+        # evidence check could not find, so a screen showing an older run reads that run's flags and
+        # the lecturer is told which quote is missing, not only that one is.
+        cur.execute(
+            "update jobs set review_flags = %s, unlocated_quotes = %s "
+            "where run_id = %s and submission_id = %s",
+            (Jsonb(flags), Jsonb(_unlocated(state.get("evidence_failures", []))), run_id, submission_id),
         )
 
     return {

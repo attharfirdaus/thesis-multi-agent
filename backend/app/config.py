@@ -53,6 +53,12 @@ class Settings(BaseSettings):
     # violation, a timeout, a 5xx — not only the schema case the thesis names.
     llm_max_attempts: int = Field(default=2, alias="LLM_MAX_ATTEMPTS")
     llm_timeout_seconds: float = Field(default=120, alias="LLM_TIMEOUT_SECONDS")
+    # Pause before repeating a call the provider refused or dropped (429, 5xx, transport). Doubled per
+    # attempt; a `Retry-After` header wins. An answer that merely failed validation is repeated at once.
+    llm_retry_backoff_seconds: float = Field(default=2, alias="LLM_RETRY_BACKOFF_SECONDS")
+    # Submissions graded at the same time within one run. Each multi-agent submission already makes two
+    # calls in parallel, so this doubles again against the provider's rate limit.
+    run_concurrency: int = Field(default=2, ge=1, alias="RUN_CONCURRENCY")
     # A hard ceiling on generated tokens. Without one, generation is unbounded: asked to score a
     # 9k-character analysis on 2026-10-16, the model emitted for more than 300 seconds and produced
     # nothing, while the same prompt with a cap answered in 8 seconds. Legitimate answers measured on

@@ -18,9 +18,19 @@ import re
 
 from pydantic import BaseModel, Field
 
-# A sentence ends at ., ! or ? followed by whitespace, or at a blank line (a paragraph or list break). A
-# single line break does not end one: extracted PDF text wraps lines in the middle of sentences.
-_BOUNDARY = re.compile(r"(?<=[.!?])\s+|\n\s*\n")
+# A sentence ends at ., ! or ? followed by whitespace, at a blank line (a paragraph break), or at a line
+# break before a list item ("2. …", "- …"). Any other single line break does not end one: extracted PDF
+# text wraps lines in the middle of sentences.
+_BOUNDARY = re.compile(r"(?<=[.!?])\s+|\n\s*\n|\n(?=[ \t]*(?:\d{1,2}[.)]|[-•–*])[ \t])")
+# Three places a full stop is not the end of a sentence (all seen on real submissions, 2026-11-10; the
+# rule was extended on Atthar's instruction the same day, and applies to submissions imported from then
+# on — a stored split is never recomputed, KF-05):
+# - a list number: "adalah:\n1." used to end a segment and strip the number from its own item;
+# - an abbreviation that is always followed by what it abbreviates, or a citation "et al. (2020)";
+# - a lower-case letter on the same line after it: a sentence does not start that way.
+_LIST_MARKER = re.compile(r"\s*(?:\d{1,2}|[A-Za-z])[.)]\s*")
+_ABBREVIATIONS = frozenset({"no.", "hlm.", "dr.", "prof.", "vs.", "e.g.", "i.e."})
+_CITATION_ABBREVIATIONS = frozenset({"al.", "dkk."})
 # A connector sentence (Bab III.6): fewer than 4 words, or ending in ":" because it announces what
 # follows. This is the final rule (Atthar, 2026-11-05); the annotation guideline and Bab IV state it, so
 # the raters and the system split the same way. Changing it changes the thesis's unit of assessment.
@@ -41,11 +51,30 @@ def _is_connector(sentence: str) -> bool:
     return sentence.rstrip().endswith(":") or len(sentence.split()) < _MIN_WORDS
 
 
+def _ends_sentence(text: str, position: int, boundary: re.Match[str]) -> bool:
+    """Whether `boundary` really closes the sentence that started at `position`."""
+    gap = boundary.group()
+    if boundary.start() == 0 or text[boundary.start() - 1] not in ".!?" or gap.count("\n") > 1:
+        return True  # a paragraph break, or a line break before a list item
+    sentence = text[position : boundary.start()]
+    if _LIST_MARKER.fullmatch(sentence):
+        return False
+    if text[boundary.start() - 1] != ".":
+        return True
+    last_word = sentence.split()[-1].casefold() if sentence.split() else ""
+    following = text[boundary.end() : boundary.end() + 1]
+    if last_word in _ABBREVIATIONS or (last_word in _CITATION_ABBREVIATIONS and following == "("):
+        return False
+    return "\n" in gap or not following.islower()
+
+
 def split_segments(text: str) -> list[Segment]:
     """Split `text` into sentence segments, merging each connector sentence into the next one."""
     spans: list[tuple[int, int]] = []
     position = 0
     for boundary in _BOUNDARY.finditer(text):
+        if not _ends_sentence(text, position, boundary):
+            continue
         if boundary.start() > position:
             spans.append((position, boundary.start()))
         position = boundary.end()

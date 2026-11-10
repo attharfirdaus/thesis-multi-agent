@@ -22,8 +22,6 @@ from app.security import require_csrf
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
-SESSION_TTL = dt.timedelta(days=14)
-
 
 def _set_session_cookies(response: Response, token: str, csrf: str) -> None:
     settings = get_settings()
@@ -60,7 +58,13 @@ def _create_session(cur, user_id) -> tuple[str, str]:
     cur.execute(
         "insert into sessions (user_id, token_hash, csrf_token, expires_at) "
         "values (%s, %s, %s, now() + %s)",
-        (user_id, security.token_hash(token), security.token_hash(csrf), SESSION_TTL),
+        (
+            user_id,
+            security.token_hash(token),
+            security.token_hash(csrf),
+            # The same setting the cookie's max-age reads, so the two cannot disagree.
+            dt.timedelta(days=get_settings().session_ttl_days),
+        ),
     )
     return token, csrf
 
@@ -72,17 +76,22 @@ def current_user(request: Request) -> UserOut:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Not signed in.")
     digest = security.token_hash(token)
     with db.plain_tx() as conn, conn.cursor(row_factory=dict_row) as cur:
+        # One statement: every authenticated request pays this before its own work, and against a
+        # remote database each statement is a round trip. `last_seen_at` moves at most once a minute.
         row = cur.execute(
+            "with touched as ("
+            "  update sessions set last_seen_at = now() "
+            "  where token_hash = %s and last_seen_at < now() - interval '1 minute'"
+            ") "
             "select u.id, u.email, u.name, u.role, s.expires_at "
             "from sessions s join users u on u.id = s.user_id "
             "where s.token_hash = %s",
-            (digest,),
+            (digest, digest),
         ).fetchone()
         if row is None:
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Session not found.")
         if row["expires_at"] <= dt.datetime.now(dt.UTC):
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Session expired.")
-        cur.execute("update sessions set last_seen_at = now() where token_hash = %s", (digest,))
     return UserOut(id=row["id"], email=row["email"], name=row["name"], role=row["role"])
 
 

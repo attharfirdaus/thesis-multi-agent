@@ -7,14 +7,16 @@ reachable through its own results endpoint.
 """
 
 import uuid
+from typing import Annotated
 
-from fastapi import APIRouter, HTTPException, Request, status
+from fastapi import APIRouter, HTTPException, Query, Request, status
 from psycopg.rows import dict_row
 
 from app import db
 from app.ingest.identity_store import read as read_identity
 from app.routers.auth import CurrentUser
 from app.schemas import (
+    AcceptAllOut,
     CommentIn,
     CommentOut,
     EvidenceOut,
@@ -28,6 +30,8 @@ from app.schemas import (
     SegmentScoreOut,
     SubmissionDetailOut,
     SubmissionScoreOut,
+    SynthesisOut,
+    UnlocatedQuoteOut,
 )
 from app.security import require_csrf
 
@@ -35,11 +39,19 @@ router = APIRouter(tags=["reviews"])
 
 
 @router.get("/submissions/{submission_id}", response_model=SubmissionDetailOut)
-def get_submission(submission_id: uuid.UUID, user: CurrentUser) -> SubmissionDetailOut:
+def get_submission(
+    submission_id: uuid.UUID,
+    user: CurrentUser,
+    run_id: Annotated[uuid.UUID | None, Query(alias="run")] = None,
+) -> SubmissionDetailOut:
     """The split view: the student's text, every score with its quote, and how the lecturer judged it.
 
     A submission that has never been scored is not an error — the lecturer opens it right after
     uploading, before any run exists — so the texts come back with `run`, `rubric` and `scores` empty.
+
+    `run` names the run whose scores to show; without it the newest run that scored the submission is
+    used. An earlier run's scores, and the reviews the lecturer attached to them, stay reachable this way
+    after a re-grade.
     """
     with db.tenant_tx(user.id) as conn, conn.cursor(row_factory=dict_row) as cur:
         submission = cur.execute(
@@ -57,9 +69,12 @@ def get_submission(submission_id: uuid.UUID, user: CurrentUser) -> SubmissionDet
             "select r.id, r.status, r.mode, r.rubric_version_id from runs r "
             "where exists (select 1 from system_scores sc "
             "              where sc.run_id = r.id and sc.submission_id = %s) "
-            "order by r.created_at desc limit 1",
-            (submission_id,),
+            "and (%s::uuid is null or r.id = %s) "
+            "order by r.created_at desc, r.repetition_index desc limit 1",
+            (submission_id, run_id, run_id),
         ).fetchone()
+        synthesis = None
+        unlocated: list[UnlocatedQuoteOut] = []
 
         scores: list[SubmissionScoreOut] = []
         segment_scores: list[SegmentScoreOut] = []
@@ -150,10 +165,33 @@ def get_submission(submission_id: uuid.UUID, user: CurrentUser) -> SubmissionDet
             ).fetchall():
                 reviews.append(ReviewOut(**row))
 
+            # What the synthesis step wrote for the lecturer (FR-14): its explanation and every mismatch
+            # it found between a rationale and its quote. The flag alone said "something does not match".
+            # This run's own flags and unlocated quotes (0010); the submission row holds the newest run's.
+            job = cur.execute(
+                "select review_flags, unlocated_quotes from jobs "
+                "where run_id = %s and submission_id = %s order by updated_at desc limit 1",
+                (run["id"], submission_id),
+            ).fetchone()
+            if job is not None:
+                submission["review_flags"] = job["review_flags"]
+                unlocated = [UnlocatedQuoteOut(**item) for item in job["unlocated_quotes"] or []]
+            trace = cur.execute(
+                "select output_json from agent_traces where run_id = %s and submission_id = %s "
+                "and agent_name = 'synthesis' and output_json is not null limit 1",
+                (run["id"], submission_id),
+            ).fetchone()
+            if trace is not None:
+                synthesis = SynthesisOut(
+                    rationale=trace["output_json"].get("rationale") or "",
+                    inconsistencies=list(trace["output_json"].get("inconsistencies") or []),
+                )
+
         feedback = cur.execute(
             "select generated_text, edited_text, edited_by, exported_at from feedback "
-            "where submission_id = %s order by created_at desc limit 1",
-            (submission_id,),
+            "where submission_id = %s and (run_id is null or %s::uuid is null or run_id = %s) "
+            "order by created_at desc limit 1",
+            (submission_id, run["id"] if run else None, run["id"] if run else None),
         ).fetchone()
 
     return SubmissionDetailOut(
@@ -165,6 +203,8 @@ def get_submission(submission_id: uuid.UUID, user: CurrentUser) -> SubmissionDet
         else RunRefOut(id=run["id"], status=run["status"], mode=run["mode"]),
         scores=scores,
         segment_scores=segment_scores,
+        synthesis=synthesis,
+        unlocated_quotes=unlocated,
         feedback=None if feedback is None else FeedbackOut(**feedback),
         reviews=reviews,
     )
@@ -224,6 +264,28 @@ def review_score(
             )
 
     return ReviewOut(**created)
+
+
+@router.post("/submissions/{submission_id}/accept-all", response_model=AcceptAllOut)
+def accept_all(
+    submission_id: uuid.UUID, request: Request, user: CurrentUser, run: uuid.UUID
+) -> AcceptAllOut:
+    """Accept every score of this run on this submission that has no review yet, in one statement.
+
+    A submission carries five text-level scores and five per segment; accepting them one request at a
+    time is hundreds of clicks. A score the lecturer already judged — accepted or overridden — is left
+    exactly as it is.
+    """
+    require_csrf(request)
+    with db.tenant_tx(user.id) as conn:
+        accepted = conn.execute(
+            "insert into lecturer_reviews (owner_id, system_score_id, action) "
+            "select %s, sc.id, 'accept' from system_scores sc "
+            "where sc.submission_id = %s and sc.run_id = %s "
+            "and not exists (select 1 from lecturer_reviews lr where lr.system_score_id = sc.id)",
+            (user.id, submission_id, run),
+        ).rowcount
+    return AcceptAllOut(accepted=accepted)
 
 
 @router.patch("/submissions/{submission_id}/feedback", response_model=FeedbackOut)

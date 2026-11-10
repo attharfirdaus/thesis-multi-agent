@@ -167,7 +167,7 @@ def _upload_one_more(client, csrf: str, assignment: str) -> str:
                 "files",
                 (
                     "Tugas 2_Budi Santoso.docx",
-                    build_submission_docx(),
+                    build_submission_docx(" Itu kesimpulan saya untuk tugas kedua ini."),
                     "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
                 ),
             )

@@ -16,7 +16,9 @@ the actual insert touch nothing external, so they stay in `_persist`, inside the
 as they always were.
 """
 
+import re
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from typing import Annotated
 
@@ -51,6 +53,47 @@ _SUBMISSION_COLUMNS = (
     "id, assignment_id, pseudonym, segmentation_status, import_warnings, "
     "coalesce(ai_output_text, '') as ai_output_text, coalesce(student_analysis_text, '') as analysis"
 )
+
+
+# A label line of the identity block the assignment template opens with ("Nama : …", "NIM : …").
+_IDENTITY_LINE = re.compile(
+    r"^\s*(?:nama|nim|nip|kelas|prodi|program studi|mata kuliah)\b[^\n:|]*[:|]", re.IGNORECASE
+)
+
+DUPLICATE = "This file duplicates a submission already in this assignment."
+NO_ANALYSIS = "No analysis text could be read from this file."
+
+
+def strip_header(text: str) -> str:
+    """The analysis without the document header above it: the title line and the identity block.
+
+    The header is not analysis, but it was stored as the start of the first sentence, and on both real
+    submissions graded on 2026-11-10 an agent took "Tugas 1: Analisis COSO" as evidence that the student
+    refers to the task requirements (`orientasi`). Only the first lines are looked at, and only when an
+    identity label is among them, so a document without the block is returned untouched.
+    """
+    lines = text.split("\n")
+    identity = [i for i, line in enumerate(lines[:8]) if _IDENTITY_LINE.match(line)]
+    if not identity:
+        return text
+    # What stands above the block goes with it only when it reads as a title: one or two short lines
+    # that are not sentences. Prose above the block is the student's and stays.
+    above = lines[: identity[0]]
+    titled = len(above) <= 2 and all(len(line) <= 100 and not line.rstrip().endswith(".") for line in above)
+    kept = [
+        line
+        for i, line in enumerate(lines)
+        if i not in identity and not (titled and i < identity[0])
+    ]
+    return "\n".join(kept).lstrip() or text
+
+
+def drop_checkpoints(cur, thread_pattern: str) -> None:
+    """Remove LangGraph checkpoints whose thread (`run:submission`) matches. They are LangGraph's
+    tables, outside the foreign keys, and a checkpoint left by an interrupted job holds the
+    submission's text: deleting the submission has to reach it."""
+    for table in ("checkpoint_writes", "checkpoint_blobs", "checkpoints"):
+        cur.execute(f"delete from {table} where thread_id like %s", (thread_pattern,))  # noqa: S608
 
 
 def _as_out(row: dict, real_name: str | None = None) -> SubmissionOut:
@@ -108,6 +151,7 @@ def _prepare(doc: ExtractedDocument, client: ProviderClient | None = None) -> _P
         ai_text, analysis_text = ai.text, analysis.text
         events = [*ai.events, *analysis.events]
 
+    analysis_text = strip_header(analysis_text)
     warnings = [*doc.warnings, *result.warnings]
     if not analysis_text.strip() and not ai_text.strip():
         warnings.append("No extractable text was found in this file.")
@@ -133,6 +177,16 @@ def _prepare(doc: ExtractedDocument, client: ProviderClient | None = None) -> _P
 
 def _persist(cur, owner_id: uuid.UUID, assignment_id: uuid.UUID, prepared: _Prepared) -> ImportedSubmission:
     """The database-only half: given an already segmented-and-redacted document, insert its rows."""
+    # Both refusals report the file as failed instead of storing a row nobody can grade: an empty one
+    # was queued by every run and failed each time, and a second copy was graded and exported twice.
+    if not prepared.analysis_text.strip():
+        raise ValueError(NO_ANALYSIS)
+    if cur.execute(
+        "select 1 from submissions where assignment_id = %s and student_analysis_text = %s "
+        "and coalesce(ai_output_text, '') = %s limit 1",
+        (assignment_id, prepared.analysis_text, prepared.ai_text),
+    ).fetchone():
+        raise ValueError(DUPLICATE)
     pseudonym = f"S-{uuid.uuid4().hex[:8]}"
     row = cur.execute(
         "insert into submissions (owner_id, assignment_id, pseudonym, ai_output_text, "
@@ -197,7 +251,7 @@ def upload_submissions(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Assignment not found.")
 
     imported: list[ImportedSubmission] = []
-    prepared: list[_Prepared] = []
+    extracted: list[ExtractedDocument] = []
     for upload in files:
         name = upload.filename or "unnamed"
         try:
@@ -216,10 +270,25 @@ def upload_submissions(
             else:
                 documents = [extract(name, data)]
 
-            for doc in documents:
-                prepared.append(_prepare(doc))
+            extracted.extend(documents)
         except Exception as exc:  # one bad file must not fail the batch (FR-03)
             imported.append(ImportedSubmission(filename=name, status="failed", error=str(exc)))
+
+    # Side by side: a file without a label costs one provider call of several seconds, and a class
+    # batch of them in sequence kept the upload request open for minutes.
+    def prepare(doc: ExtractedDocument) -> _Prepared | ImportedSubmission:
+        try:
+            return _prepare(doc)
+        except Exception as exc:  # one bad file must not fail the batch (FR-03)
+            return ImportedSubmission(filename=doc.filename, status="failed", error=str(exc))
+
+    prepared: list[_Prepared] = []
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        for outcome in pool.map(prepare, extracted):
+            if isinstance(outcome, _Prepared):
+                prepared.append(outcome)
+            else:
+                imported.append(outcome)
 
     with db.tenant_tx(user.id) as conn, conn.cursor(row_factory=dict_row) as cur:
         for item in prepared:
@@ -273,6 +342,7 @@ def delete_submission(submission_id: uuid.UUID, request: Request, user: CurrentU
                 detail="This submission is still queued or being graded; stop the run first.",
             )
         cur.execute("delete from submissions where id = %s", (submission_id,))
+        drop_checkpoints(cur, f"%:{submission_id}")
         # Not a foreign-key cascade any more (DECISIONS.md, 2026-10-16): the identity now lives
         # outside Postgres, so deleting it is this router's job. Done inside the same transaction so
         # a failure here rolls the submission delete back too, rather than leaving the submission
@@ -298,6 +368,15 @@ def correct_segmentation(
         if row is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Submission not found.")
 
+        busy = cur.execute(
+            "select 1 from jobs where submission_id = %s and status in ('queued', 'running') limit 1",
+            (submission_id,),
+        ).fetchone()
+        if busy:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="This submission is still queued or being graded; stop the run first.",
+            )
         combined = f"{row['ai_output_text']}\n{row['analysis']}" if row["ai_output_text"] else row["analysis"]
         if payload.analysis_start > len(combined):
             raise HTTPException(
@@ -321,5 +400,11 @@ def correct_segmentation(
         ).fetchone()
         if updated is None:  # the row cannot vanish inside the transaction; satisfies the type checker
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Submission not found.")
+        # Every stored score points into the text that just changed: its segments, its quotes and
+        # their offsets. Left in place they highlighted unrelated words (seen 2026-11-10), so they go,
+        # with their evidence, reviews and comments, and the submission reads as not yet graded.
+        cur.execute("delete from system_scores where submission_id = %s", (submission_id,))
+        cur.execute("delete from feedback where submission_id = %s", (submission_id,))
+        cur.execute("update submissions set review_flags = '[]'::jsonb where id = %s", (submission_id,))
 
     return _as_out(updated, read_identities([submission_id], user.id).get(submission_id))

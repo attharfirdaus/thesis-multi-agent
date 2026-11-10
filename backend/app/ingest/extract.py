@@ -37,6 +37,8 @@ SourceFormat = Literal["pdf", "docx", "txt"]
 
 _BLOCK = tuple[BlockKind, str, int | None, list[str] | None]
 
+MAX_MEMBER_BYTES = 20 * 1024 * 1024
+
 _BLANK_LINE = re.compile(r"\n\s*\n")
 
 
@@ -70,6 +72,9 @@ def extract_zip(filename: str, data: bytes) -> tuple[list[ExtractedDocument], li
             if info.is_dir() or _is_archive_junk(info.filename):
                 continue
             try:
+                # The declared size, checked before inflating: the upload cap only bounds the archive.
+                if info.file_size > MAX_MEMBER_BYTES:
+                    raise ValueError(f"larger than {MAX_MEMBER_BYTES // (1024 * 1024)} MB unpacked")
                 documents.append(extract(info.filename, archive.read(info)))
             except Exception as exc:
                 errors.append(f"{info.filename}: {exc}")

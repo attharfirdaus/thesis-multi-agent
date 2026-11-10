@@ -16,8 +16,11 @@ from fastapi import APIRouter, HTTPException, Request, status
 from psycopg.rows import dict_row
 
 from app import db
+from app.ingest.identity_store import delete as delete_identity
 from app.ingest.identity_store import read_many as read_identities
+from app.jobs import worker
 from app.routers.auth import CurrentUser
+from app.routers.ingest import drop_checkpoints
 from app.schemas import (
     AssignmentCreate,
     AssignmentDetailOut,
@@ -27,6 +30,7 @@ from app.schemas import (
     SubmissionSummaryOut,
 )
 from app.security import require_csrf
+from scripts.seed_rubric import ensure_seeded
 
 router = APIRouter(tags=["assignments"])
 
@@ -104,6 +108,7 @@ def create_assignment(
     immutable once a run has used it: the run that scores this assignment snapshots it from there."""
     require_csrf(request)
     with db.tenant_tx(user.id) as conn, conn.cursor(row_factory=dict_row) as cur:
+        ensure_seeded(cur, user.id)
         rubric = cur.execute(
             "select id from rubric_versions where owner_id = %s order by version desc limit 1",
             (user.id,),
@@ -124,6 +129,52 @@ def create_assignment(
             )
 
     return AssignmentSummaryOut(**created, submission_count=0, latest_run=None)
+
+
+@router.patch("/assignments/{assignment_id}", response_model=AssignmentSummaryOut)
+def update_assignment(
+    assignment_id: uuid.UUID, payload: AssignmentCreate, request: Request, user: CurrentUser
+) -> AssignmentSummaryOut:
+    """Correct an assignment's title, course or task text. Nothing scored depends on them."""
+    require_csrf(request)
+    with db.tenant_tx(user.id) as conn, conn.cursor(row_factory=dict_row) as cur:
+        updated = cur.execute(
+            "update assignments set title = %s, course = %s, prompt_text = %s, updated_at = now() "
+            "where id = %s returning id, title, course, prompt_text, created_at, "
+            "(select count(*) from submissions s where s.assignment_id = assignments.id) as submission_count",
+            (payload.title, payload.course, payload.prompt_text, assignment_id),
+        ).fetchone()
+    if updated is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Assignment not found.")
+    return AssignmentSummaryOut(**updated)
+
+
+@router.delete("/assignments/{assignment_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_assignment(assignment_id: uuid.UUID, request: Request, user: CurrentUser) -> None:
+    """Remove an assignment with its submissions, runs, scores and reviews (they cascade), and what the
+    foreign keys do not reach: the stored names and any checkpoint. Refused while a job is waiting or
+    being graded, for the reason `DELETE /submissions/{id}` is."""
+    require_csrf(request)
+    with db.tenant_tx(user.id) as conn, conn.cursor(row_factory=dict_row) as cur:
+        if cur.execute("select 1 from assignments where id = %s", (assignment_id,)).fetchone() is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Assignment not found.")
+        if cur.execute(
+            "select 1 from jobs j join runs r on r.id = j.run_id "
+            "where r.assignment_id = %s and j.status in ('queued', 'running') limit 1",
+            (assignment_id,),
+        ).fetchone():
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="This assignment is still being graded; stop the run first.",
+            )
+        submissions = cur.execute(
+            "select id from submissions where assignment_id = %s", (assignment_id,)
+        ).fetchall()
+        for run in cur.execute("select id from runs where assignment_id = %s", (assignment_id,)).fetchall():
+            drop_checkpoints(cur, f"{run['id']}:%")
+        cur.execute("delete from assignments where id = %s", (assignment_id,))
+        for row in submissions:
+            delete_identity(row["id"])
 
 
 @router.get("/assignments/{assignment_id}", response_model=AssignmentDetailOut)
@@ -157,9 +208,9 @@ def get_assignment(assignment_id: uuid.UUID, user: CurrentUser) -> AssignmentDet
             # A run needs review when one of its submissions carries a flag from the pipeline
             # (PRD §6). Counted inside the same query rather than one lookup per run.
             "select r.id, r.status, r.mode, r.repetition_index, r.repetitions, r.final_evaluation, "
-            "       r.model_unavailable, "
-            "       (select count(*) from submissions s join jobs j on j.submission_id = s.id "
-            "        where j.run_id = r.id and jsonb_array_length(s.review_flags) > 0) as needs_review "
+            "       r.model_unavailable, r.created_at, "
+            "       (select count(*) from jobs j "
+            "        where j.run_id = r.id and jsonb_array_length(j.review_flags) > 0) as needs_review "
             "from runs r where r.assignment_id = %s order by r.created_at desc",
             (assignment_id,),
         ).fetchall()
@@ -184,6 +235,8 @@ def get_assignment(assignment_id: uuid.UUID, user: CurrentUser) -> AssignmentDet
                 model_unavailable=run["model_unavailable"],
                 jobs=jobs.get(run["id"], {}),
                 needs_review=run["needs_review"],
+                busy=worker.is_driving(run["id"]),
+                created_at=run["created_at"],
             )
             for run in runs
         ],
