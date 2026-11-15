@@ -49,6 +49,25 @@ function TechnicalDetail({ lines }: { lines: string[] }) {
   );
 }
 
+// What each pipeline step is doing, in the lecturer's words (PRD, UI rules: no "agen" or "prompt" here).
+const STEP_TEXT: Record<string, string> = {
+  preprocess: "membagi analisis mahasiswa menjadi segmen",
+  cognitive: "layanan penilai sedang membaca tiap segmen untuk menentukan tingkat kognitifnya",
+  metacognitive: "layanan penilai sedang membaca tiap segmen untuk mencari indikator metakognitif",
+  single_agent:
+    "layanan penilai sedang membaca tiap segmen untuk menentukan tingkat kognitif dan indikator metakognitifnya",
+  synthesis: "layanan penilai sedang menyusun alasan penilaian dan umpan balik dari hasil kedua dimensi",
+  evidence: "mencocokkan setiap kutipan bukti dengan teks analisis",
+};
+
+function stepText(steps: string[]): string {
+  if (steps.length === 0) return "menunggu langkah berikutnya";
+  if (steps.includes("cognitive") && steps.includes("metacognitive")) {
+    return "layanan penilai sedang membaca tiap segmen untuk menentukan tingkat kognitif dan mencari indikator metakognitif";
+  }
+  return steps.map((step) => STEP_TEXT[step] ?? step).join("; ");
+}
+
 function jobTotals(jobs: RunSummary["jobs"]) {
   const counts = jobs ?? {};
   const done = counts.done ?? 0;
@@ -156,7 +175,17 @@ export default function TugasPage() {
     : [];
   const unfinishedRunId =
     liveRuns.find(runPending)?.id ?? null;
-  const inFlightNames = (run?.in_flight ?? []).map((item) => item.pseudonym);
+  const inFlight = run?.in_flight ?? [];
+  // Finished submissions, plus the finished share of each one in flight: with one submission the bar
+  // would otherwise sit at zero until the very end.
+  const progressUnits = totals
+    ? totals.done +
+      inFlight.reduce(
+        (sum, item) => sum + (item.steps_total ? (item.steps_done ?? 0) / item.steps_total : 0),
+        0,
+      )
+    : 0;
+  const progressPercent = totals && totals.total > 0 ? Math.round((progressUnits / totals.total) * 100) : 0;
   const gradedCount = detail?.graded_count ?? 0;
   const ungradedCount = Math.max((detail?.submission_count ?? 0) - gradedCount, 0);
   const flaggedCount = submissions.filter((item) => (item.review_flags ?? []).length > 0).length;
@@ -482,13 +511,13 @@ export default function TugasPage() {
                     role="progressbar"
                     aria-label="Kemajuan penilaian"
                     aria-valuemin={0}
-                    aria-valuemax={totals.total}
-                    aria-valuenow={totals.done}
+                    aria-valuemax={100}
+                    aria-valuenow={progressPercent}
                     className="h-2 w-full overflow-hidden rounded-full bg-muted"
                   >
                     <div
-                      className="h-full rounded-full bg-primary"
-                      style={{ width: `${totals.total > 0 ? Math.round((totals.done / totals.total) * 100) : 0}%` }}
+                      className="h-full rounded-full bg-primary transition-[width] duration-500"
+                      style={{ width: `${progressPercent}%` }}
                     />
                   </div>
                 </div>
@@ -499,27 +528,26 @@ export default function TugasPage() {
               )}
 
               {driving ? (
-                <div className="flex flex-col gap-2">
-                  <div
-                    role="progressbar"
-                    aria-label="Penilaian sedang berjalan"
-                    className="h-2 w-full overflow-hidden rounded-full bg-muted"
-                  >
-                    <div className="h-full w-1/3 animate-pulse rounded-full bg-primary" />
-                  </div>
-                  <p className="text-sm">
-                    {inFlightNames.length > 0 ? (
-                      <>
-                        Sedang menilai <span className="font-medium">{inFlightNames.join(", ")}</span>
-                      </>
-                    ) : (
-                      "Menilai… menyiapkan kiriman berikutnya."
-                    )}
-                  </p>
-                  <p className="text-sm text-muted-foreground">
-                    Penilaian berjalan di server. Halaman ini boleh ditinggalkan dan dibuka lagi kapan saja.
-                  </p>
-                </div>
+                <ul className="flex flex-col gap-1 text-sm" aria-live="polite">
+                  {inFlight.length > 0 ? (
+                    inFlight.map((item) => (
+                      <li key={item.submission_id}>
+                        <span className="font-medium">{item.pseudonym}</span>
+                        {": "}
+                        {stepText(item.steps ?? [])}
+                        {item.steps_total ? (
+                          <span className="text-muted-foreground">
+                            {" "}
+                            (langkah {Math.min((item.steps_done ?? 0) + 1, item.steps_total)} dari{" "}
+                            {item.steps_total})
+                          </span>
+                        ) : null}
+                      </li>
+                    ))
+                  ) : (
+                    <li>Menyiapkan kiriman berikutnya…</li>
+                  )}
+                </ul>
               ) : null}
 
               {/* The scope decides what the primary button spends quota on, so it sits directly above it. */}

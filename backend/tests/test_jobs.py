@@ -127,7 +127,7 @@ def stub_graph(
     """Replace the graph with `run`, returning the states it was given."""
     seen: list = []
 
-    def fake(state, checkpointer=None):
+    def fake(state, checkpointer=None, on_step=None):
         seen.append(state)
         return run(state)
 

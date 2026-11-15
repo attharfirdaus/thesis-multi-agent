@@ -144,9 +144,9 @@ def test_real_submissions_score_with_offsets_in_their_own_text(client, monkeypat
     assert run.status_code == 201, run.text
     run_id = run.json()["id"]
 
-    def fake_evaluate(state, checkpointer=None):
+    def fake_evaluate(state, checkpointer=None, **kwargs):
         stub = QuoteStub(split_segments(state["student_analysis_text"]))
-        return graph_module.evaluate_submission(state, client=stub, checkpointer=checkpointer)
+        return graph_module.evaluate_submission(state, client=stub, checkpointer=checkpointer, **kwargs)
 
     monkeypatch.setattr("app.jobs.worker.evaluate_submission", fake_evaluate)
 

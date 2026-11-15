@@ -42,6 +42,11 @@ def _count(row: dict | None) -> int:
     return int(row["n"]) if row else 0
 
 
+def _steps(run_id: uuid.UUID, submission_id: uuid.UUID) -> dict:
+    steps, done, total = worker.step_progress(run_id, submission_id)
+    return {"steps": steps, "steps_done": done, "steps_total": total}
+
+
 def _run_out(cur, run_id: uuid.UUID, *, processed: int = 0, failed: int = 0) -> RunOut:
     """The run as the lecturer's screen reads it: status, job counts, what needs review, what is in flight.
 
@@ -66,7 +71,7 @@ def _run_out(cur, run_id: uuid.UUID, *, processed: int = 0, failed: int = 0) -> 
         ).fetchone()
     )
     in_flight = [
-        InFlightOut(**row)
+        InFlightOut(**row, **_steps(run_id, row["submission_id"]))
         for row in cur.execute(
             "select s.id as submission_id, s.pseudonym from jobs j "
             "join submissions s on s.id = j.submission_id "

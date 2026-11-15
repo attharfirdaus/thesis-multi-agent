@@ -295,9 +295,9 @@ def seeded(client, monkeypatch):
 
     stub = StubClient()
 
-    def fake_evaluate(state, checkpointer=None):
+    def fake_evaluate(state, checkpointer=None, **kwargs):
         # Passing the checkpointer through keeps the test on the same path the worker uses.
-        return graph_module.evaluate_submission(state, client=stub, checkpointer=checkpointer)
+        return graph_module.evaluate_submission(state, client=stub, checkpointer=checkpointer, **kwargs)
 
     monkeypatch.setattr("app.jobs.worker.evaluate_submission", fake_evaluate)
 

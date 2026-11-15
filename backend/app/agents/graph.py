@@ -462,6 +462,9 @@ def build_single_agent_graph(checkpointer: Any = None, client: ProviderClient | 
     return graph.compile(checkpointer=checkpointer)
 
 
+#: Called with a step's name and whether it has finished (False: it has just started).
+type StepHook = Callable[[str, bool], None]
+
 #: Mode -> graph builder (FR-15). The run's own `mode` column selects the pipeline; a mode this
 #: dict does not know is a data error the worker must not paper over, so `evaluate_submission`
 #: raises rather than default to a graph the run never asked for.
@@ -471,8 +474,26 @@ _GRAPH_BUILDERS: dict[str, Callable[..., Any]] = {
 }
 
 
+def _run_graph(graph: Any, payload: Any, config: Any, on_step: StepHook | None) -> GraphState:
+    """`graph.invoke`, plus a report of every step as it starts and as it ends.
+
+    `invoke` is a stream in `values` mode that keeps the last chunk; adding `tasks` to the same stream is
+    what lets the progress screen say which step a submission is in, not only that it is in flight.
+    """
+    result: Any = None
+    for kind, event in graph.stream(payload, config, stream_mode=["tasks", "values"]):
+        if kind == "values":
+            result = event
+        elif on_step is not None:
+            on_step(event["name"], "result" in event)
+    return result
+
+
 def evaluate_submission(
-    state: GraphState, client: ProviderClient | None = None, checkpointer: Any = None
+    state: GraphState,
+    client: ProviderClient | None = None,
+    checkpointer: Any = None,
+    on_step: StepHook | None = None,
 ) -> GraphState:
     """Run one submission end to end and return the result. The caller persists it (PRD §6).
 
@@ -501,12 +522,12 @@ def evaluate_submission(
         raise ValueError(f"unknown run mode {mode!r}") from None
     graph = build(client=client, checkpointer=checkpointer)
     if not checkpointer:
-        return graph.invoke(state)
+        return _run_graph(graph, state, None, on_step)
     thread_id = f"{state['run_id']}:{state['submission_id']}"
     config = {"configurable": {"thread_id": thread_id}}
     interrupted = bool(graph.get_state(config).next)
     if not interrupted:
         checkpointer.delete_thread(thread_id)
-    result = graph.invoke(None if interrupted else state, config)
+    result = _run_graph(graph, None if interrupted else state, config, on_step)
     checkpointer.delete_thread(thread_id)
     return result

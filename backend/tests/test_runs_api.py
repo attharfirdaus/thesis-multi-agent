@@ -103,8 +103,8 @@ def test_a_new_run_does_not_inherit_the_previous_run_s_flags(seeded, monkeypatch
     import app.agents.graph as graph_module
 
     def evaluate_with(stub):
-        def run(state, checkpointer=None):
-            return graph_module.evaluate_submission(state, client=stub, checkpointer=checkpointer)
+        def run(state, checkpointer=None, **kwargs):
+            return graph_module.evaluate_submission(state, client=stub, checkpointer=checkpointer, **kwargs)
 
         return run
 

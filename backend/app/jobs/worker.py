@@ -246,6 +246,46 @@ def _checkpointer():
         )
 
 
+#: The steps of each pipeline, in the order the graph runs them; steps in one group run side by side.
+_STAGES: dict[str, tuple[tuple[str, ...], ...]] = {
+    "multi_agent": (("preprocess",), ("cognitive", "metacognitive"), ("synthesis",), ("evidence",)),
+    "single_agent": (("preprocess",), ("single_agent",), ("evidence",)),
+}
+
+# (run, submission) -> (steps running now, steps finished, steps in total), for the progress screen.
+# Each value is replaced whole, never mutated, so the request thread reading it needs no lock.
+# ponytail: in-process, like `_driving` below; a run driven from the CLI reports no steps.
+_progress: dict[tuple[UUID, UUID], tuple[list[str], int, int]] = {}
+
+
+def step_progress(run_id: UUID, submission_id: UUID) -> tuple[list[str], int, int]:
+    return _progress.get((run_id, submission_id), ([], 0, 0))
+
+
+def _step_hook(key: tuple[UUID, UUID], mode: str):
+    stages = _STAGES.get(mode, ())
+    total = sum(len(stage) for stage in stages)
+    active: set[str] = set()
+    done: set[str] = set()
+
+    def on_step(name: str, finished: bool) -> None:
+        if finished:
+            active.discard(name)
+            done.add(name)
+        else:
+            active.add(name)
+            # A resumed submission starts mid-graph: the stages before this step ended in an earlier
+            # attempt and are not reported again.
+            for stage in stages:
+                if name in stage:
+                    break
+                done.update(stage)
+        _progress[key] = (sorted(active), len(done), total)
+
+    _progress[key] = ([], 0, total)
+    return on_step
+
+
 def _run_one(owner_id: UUID, job: dict) -> str:
     """Run one claimed job and return its outcome: `done`, `failed` (out of retries) or `skipped`
     (failed, will be retried).
@@ -262,7 +302,15 @@ def _run_one(owner_id: UUID, job: dict) -> str:
                 )
             # Outside tenant context on purpose: the graph calls a provider and can take seconds, and
             # holding a transaction across that would pin a pooled connection for the whole batch.
-            result = evaluate_submission(state, checkpointer=saver)
+            key = (job["run_id"], job["submission_id"])
+            try:
+                result = evaluate_submission(
+                    state,
+                    checkpointer=saver,
+                    on_step=_step_hook(key, state.get("mode") or "multi_agent"),
+                )
+            finally:
+                _progress.pop(key, None)
         except ModelUnavailable as error:
             _flag_model_unavailable(owner_id, job, error)
             saver.delete_thread(thread_id)

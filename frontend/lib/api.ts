@@ -114,7 +114,14 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
 /** Job counts per status (`queued`, `running`, `done`, `failed`) — PRD §10 `Job`. */
 export type JobCounts = Record<string, number>;
 
-export type RunInFlight = { submission_id: string; pseudonym: string };
+export type RunInFlight = {
+  submission_id: string;
+  pseudonym: string;
+  /** Pipeline steps running for it now; empty when another process drives the run. */
+  steps?: string[];
+  steps_done?: number;
+  steps_total?: number;
+};
 
 /**
  * A run. The list endpoint's `latest_run` carries only the id, status and counters; the run endpoints

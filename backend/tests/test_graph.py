@@ -453,3 +453,18 @@ def test_a_synthesis_inconsistency_sends_the_submission_to_review(prompt_calls):
 
     assert SYNTHESIS_INCONSISTENCY in result["flags"] and NEEDS_REVIEW in result["flags"]
     assert result["cognitive"].segments[0].level == "C4"
+
+
+def test_evaluate_submission_reports_each_step_as_it_starts_and_ends():
+    """The progress screen names the step a submission is in; that is only true if every step is
+    reported started before it is reported finished, in pipeline order."""
+    events: list[tuple[str, bool]] = []
+    evaluate_submission(
+        make_state(), StubClient(full_plan()), on_step=lambda name, done: events.append((name, done))
+    )
+
+    finished = [name for name, done in events if done]
+    assert finished[0] == "preprocess" and finished[-2:] == ["synthesis", "evidence"]
+    assert sorted(finished[1:3]) == ["cognitive", "metacognitive"]
+    for name in finished:
+        assert events.index((name, False)) < events.index((name, True))

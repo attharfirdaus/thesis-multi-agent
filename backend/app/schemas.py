@@ -107,6 +107,11 @@ class ScoreOut(BaseModel):
 class SubmissionResultOut(BaseModel):
     submission_id: UUID
     pseudonym: str
+    #: The pipeline steps running for it right now, and how many of its steps have finished. All empty
+    #: when another process drives the run: the steps are known only to the process running them.
+    steps: list[str] = Field(default_factory=list)
+    steps_done: int = 0
+    steps_total: int = 0
     real_name: str | None = None
     review_flags: list[str] = Field(default_factory=list)
     scores: list[ScoreOut] = Field(default_factory=list)
