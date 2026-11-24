@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 
-import { useCurrentUser } from "@/components/app-shell";
+import { PageHeader, useCurrentUser } from "@/components/app-shell";
 import { StatusBadge, runStatus } from "@/components/status-badge";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
@@ -22,9 +22,9 @@ export default function AdminPage() {
 }
 
 const TEXTAREA_CLASS =
-  "w-full rounded-lg border border-input bg-transparent px-2.5 py-1.5 font-mono text-sm outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50";
+  "w-full rounded-lg border border-input bg-card px-3 py-2 font-mono text-sm outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50";
 const SELECT_CLASS =
-  "h-8 w-full rounded-lg border border-input bg-background px-2 text-base outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50";
+  "h-10 w-full rounded-lg border border-input bg-card px-3 text-base outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50";
 
 const lines = (value: string) =>
   value
@@ -161,7 +161,11 @@ function AdminArea() {
 
   return (
     <>
-      <h1 className="text-2xl font-semibold">Admin</h1>
+      <PageHeader
+        eyebrow="Area peneliti"
+        title="Admin"
+        description="Run penelitian, log setiap langkah agen, versi rubrik dan prompt, serta daftar pengguna."
+      />
       {error ? (
         <Alert variant="destructive">
           <AlertDescription>{error}</AlertDescription>
@@ -248,8 +252,8 @@ function AdminArea() {
           <CardDescription>Masukan, keluaran terstruktur, latensi, dan galat setiap langkah agen.</CardDescription>
         </CardHeader>
         <CardContent className="overflow-x-auto">
-          <table className="w-full text-left text-sm">
-            <thead>
+          <table className="w-full [&_td:first-child]:pl-3 [&_th]:py-3 [&_th:first-child]:pl-3 [&_tbody_tr]:transition-colors [&_tbody_tr:hover]:bg-surface/60 text-left text-sm">
+            <thead className="bg-muted/70 text-xs tracking-wide text-muted-foreground uppercase">
               <tr className="border-b">
                 <th className="py-2 pr-3 font-medium">Waktu</th>
                 <th className="py-2 pr-3 font-medium">Tugas</th>

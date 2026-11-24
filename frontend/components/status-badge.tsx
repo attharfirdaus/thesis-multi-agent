@@ -7,7 +7,14 @@ const TONES: Record<Tone, string> = {
   green: "bg-emerald-50 text-emerald-900 ring-emerald-700/30",
   amber: "bg-amber-50 text-amber-900 ring-amber-700/40",
   red: "bg-red-50 text-red-900 ring-red-700/30",
-  neutral: "bg-muted text-foreground ring-foreground/20",
+  neutral: "bg-muted text-foreground ring-foreground/15",
+};
+
+const DOTS: Record<Tone, string> = {
+  green: "bg-emerald-600",
+  amber: "bg-amber-600",
+  red: "bg-red-600",
+  neutral: "bg-slate-500",
 };
 
 export function StatusBadge({
@@ -22,11 +29,12 @@ export function StatusBadge({
   return (
     <span
       className={cn(
-        "inline-flex items-center rounded-full px-2 py-0.5 text-sm font-medium ring-1 ring-inset",
+        "inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-sm font-medium whitespace-nowrap ring-1 ring-inset",
         TONES[tone],
         className,
       )}
     >
+      <span aria-hidden="true" className={cn("size-1.5 rounded-full", DOTS[tone])} />
       {label}
     </span>
   );

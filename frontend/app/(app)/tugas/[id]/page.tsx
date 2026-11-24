@@ -4,7 +4,9 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 
-import { AdminOnly } from "@/components/app-shell";
+import { BarChart3, ChevronLeft } from "lucide-react";
+
+import { AdminOnly, PageHeader } from "@/components/app-shell";
 import { StatusBadge, runStatus, segmentationStatus } from "@/components/status-badge";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
@@ -344,21 +346,31 @@ export default function TugasPage() {
         <p className="text-muted-foreground">Memuat…</p>
       ) : (
         <>
-          <header className="flex flex-wrap items-start justify-between gap-4">
-            <div>
-              <h1 className="text-2xl font-semibold">{detail.title}</h1>
-              <p className="text-muted-foreground">
-                {detail.course} · {detail.submission_count} kiriman
-              </p>
-              {/* KF-02: read-only — a new assignment takes the newest rubric version automatically. */}
-              <p className="text-sm text-muted-foreground">
-                Versi rubrik: {detail.rubric_version ?? "belum ada"}
-              </p>
-            </div>
-            <div className="flex flex-wrap items-center gap-3">
-              <Link href={`/tugas/${id}/hasil`} className="underline underline-offset-4 hover:text-foreground">
-                Lihat hasil penilaian
+          <PageHeader
+            eyebrow={
+              <Link href="/dasbor" className="inline-flex items-center gap-1 normal-case tracking-normal hover:underline underline-offset-4">
+                <ChevronLeft className="size-4" aria-hidden="true" />
+                Dasbor
               </Link>
+            }
+            title={detail.title}
+            description={
+              <>
+                {detail.course} · {detail.submission_count} kiriman
+                {/* KF-02: read-only — a new assignment takes the newest rubric version automatically. */}
+                <span className="ml-2 inline-flex items-center rounded-md bg-surface px-2 py-0.5 text-sm text-surface-foreground">
+                  Rubrik versi {detail.rubric_version ?? "belum ada"}
+                </span>
+              </>
+            }
+            actions={
+            <>
+              <Button asChild variant="outline">
+                <Link href={`/tugas/${id}/hasil`}>
+                  <BarChart3 data-icon="inline-start" aria-hidden="true" />
+                  Lihat hasil penilaian
+                </Link>
+              </Button>
               <Button
                 variant="outline"
                 size="sm"
@@ -371,8 +383,9 @@ export default function TugasPage() {
               <Button variant="destructive" size="sm" disabled={driving} onClick={() => void onDeleteAssignment()}>
                 Hapus tugas
               </Button>
-            </div>
-          </header>
+            </>
+            }
+          />
 
           {editing ? (
             <Card>
@@ -406,7 +419,7 @@ export default function TugasPage() {
                       rows={4}
                       value={editing.prompt_text}
                       onChange={(e) => setEditing({ ...editing, prompt_text: e.target.value })}
-                      className="w-full rounded-lg border border-input bg-transparent px-2.5 py-1.5 text-base outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
+                      className="w-full rounded-lg border border-input bg-card px-3 py-2 text-base outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
                     />
                   </div>
                   <div className="flex gap-3">
@@ -690,8 +703,8 @@ export default function TugasPage() {
                 </p>
               ) : (
                 <div className="overflow-x-auto">
-                  <table className="w-full min-w-[640px] border-collapse text-left">
-                    <thead>
+                  <table className="w-full [&_td:first-child]:pl-3 [&_th]:py-3 [&_th:first-child]:pl-3 [&_tbody_tr]:transition-colors [&_tbody_tr:hover]:bg-surface/60 min-w-[640px] border-collapse text-left">
+                    <thead className="bg-muted/70 text-xs tracking-wide text-muted-foreground uppercase">
                       <tr className="border-b">
                         <th scope="col" className="py-2 pr-4 font-medium">
                           Pseudonim
