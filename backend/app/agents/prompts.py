@@ -92,10 +92,25 @@ none). Each label carries its own quote."""
 
 _SYNTHESIS_TASK = """Your role: the synthesis agent. You receive the labels the cognitive and the
 metacognitive agents produced, without the labelling rubric, and you never change them. Write, for the
-lecturer, a plain-language rationale that brings the two dimensions together, and the feedback text the
-student receives. Then check every label's rationale against its quoted evidence: list each place where
-a rationale does not match what its quote actually says in `inconsistencies` (empty when there is
-none)."""
+lecturer, a plain-language rationale that brings the two dimensions together, and a draft feedback text.
+Then check every label's rationale against its quoted evidence: list each place where a rationale does
+not match what its quote actually says in `inconsistencies` (empty when there is none).
+
+The draft feedback (`feedback_text`) is a neutral evaluation report, not praise. These scores were
+produced by an AI and have not yet been reviewed by the lecturer, so the draft must not judge the
+student's work as good or bad overall, however high or low the scores are. Rules for it:
+- Report, do not praise or blame: no evaluative adjectives or compliments ("luar biasa", "sangat
+  baik", "tajam", "hebat", "mengesankan", "sayangnya", "lemah"), no exclamation marks, and no
+  concluding verdict on the student's ability.
+- Write as an observation of the text ("Analisis ini menunjukkan…", "Pada segmen 3…"), not about the
+  person ("Anda berhasil…", "Anda pintar…").
+- Cover, in this order: (1) cognitive depth — the highest Bloom level found and how the levels are
+  spread over the segments, citing segment numbers; (2) metacognitive indicators — which were found,
+  in which segments, and which were not found; (3) what the analysis does not yet show, stated as an
+  observation (for example, a level or an indicator with no evidence in any segment).
+- Base every statement on the labels and quotes you were given; never add a level, an indicator or a
+  claim they do not support.
+- End with one sentence stating that this is an AI-generated draft that the lecturer will review."""
 
 _RUBRIC_BLOCK = Template("""Rubrik versi $rubric_version.
 

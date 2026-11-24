@@ -81,7 +81,13 @@ class SynthesisResult(BaseModel):
     submission to the lecturer for review."""
 
     rationale: str = Field(min_length=20)
-    feedback_text: str = Field(min_length=20)
+    feedback_text: str = Field(
+        min_length=20,
+        description=(
+            "Neutral evaluation report of the cognitive depth and metacognitive indicators, citing "
+            "segments; no praise or overall verdict, since a lecturer has not yet reviewed it."
+        ),
+    )
     inconsistencies: list[str] = Field(
         default_factory=list,
         description="Each mismatch between a rationale and its quoted evidence; empty when none.",
