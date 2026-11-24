@@ -4,7 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 
-import { BarChart3, ChevronLeft, FileText, Upload, UploadCloud } from "lucide-react";
+import { BarChart3, ChevronLeft, ChevronRight, FileText, Upload, UploadCloud } from "lucide-react";
 
 import { AdminOnly, PageHeader } from "@/components/app-shell";
 import { StatusBadge, runStatus, segmentationStatus } from "@/components/status-badge";
@@ -763,7 +763,16 @@ export default function TugasPage() {
                 </p>
               ) : (
                 <div className="overflow-x-auto">
-                  <table className="w-full [&_td:first-child]:pl-3 [&_th]:py-3 [&_th:first-child]:pl-3 [&_tbody_tr]:transition-colors [&_tbody_tr:hover]:bg-surface/60 min-w-[640px] border-collapse text-left">
+                  {/* Fixed layout with set widths: opening a review's reasons wraps inside its own column
+                      instead of re-flowing every other column. */}
+                  <table className="w-full table-fixed [&_td:first-child]:pl-3 [&_th]:py-3 [&_th:first-child]:pl-3 [&_tbody_tr]:transition-colors [&_tbody_tr:hover]:bg-surface/60 min-w-[880px] border-collapse text-left">
+                    <colgroup>
+                      <col className="w-[26%]" />
+                      <col className="w-[17%]" />
+                      <col className="w-[33%]" />
+                      <col className="w-[14%]" />
+                      <col className="w-[10%]" />
+                    </colgroup>
                     <thead className="bg-muted/70 text-xs tracking-wide text-muted-foreground uppercase">
                       <tr className="border-b">
                         <th scope="col" className="py-2 pr-4 font-medium">
@@ -785,8 +794,8 @@ export default function TugasPage() {
                     </thead>
                     <tbody>
                       {submissions.map((submission) => (
-                        <tr key={submission.id} className="border-b last:border-0">
-                          <td className="py-2 pr-4">
+                        <tr key={submission.id} className="border-b align-top last:border-0">
+                          <td className="py-3 pr-4 break-words">
                             <Link
                               href={`/kiriman/${submission.id}`}
                               className="underline underline-offset-4 hover:text-foreground"
@@ -801,9 +810,15 @@ export default function TugasPage() {
                             {submission.review_flags?.length ? (
                               <div className="flex flex-col gap-1">
                                 <StatusBadge tone="amber" label="Perlu Ditinjau" className="self-start" />
-                                <details className="text-sm text-muted-foreground">
-                                  <summary className="cursor-pointer">Alasan</summary>
-                                  {flagSentences(submission.review_flags).join(" ")}
+                                <details className="group text-sm text-muted-foreground">
+                                  <summary className="inline-flex cursor-pointer list-none items-center gap-1 rounded font-medium text-primary outline-none hover:underline focus-visible:ring-3 focus-visible:ring-ring/50 [&::-webkit-details-marker]:hidden">
+                                    <ChevronRight
+                                      className="size-4 transition-transform duration-200 group-open:rotate-90"
+                                      aria-hidden="true"
+                                    />
+                                    Alasan
+                                  </summary>
+                                  <p className="mt-1 break-words">{flagSentences(submission.review_flags).join(" ")}</p>
                                 </details>
                               </div>
                             ) : (
