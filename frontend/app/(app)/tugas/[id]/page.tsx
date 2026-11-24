@@ -4,7 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 
-import { BarChart3, ChevronLeft } from "lucide-react";
+import { BarChart3, ChevronLeft, FileText, Upload, UploadCloud } from "lucide-react";
 
 import { AdminOnly, PageHeader } from "@/components/app-shell";
 import { StatusBadge, runStatus, segmentationStatus } from "@/components/status-badge";
@@ -102,6 +102,10 @@ export default function TugasPage() {
   // The thesis compares both modes, so the baseline is a choice beside the scope, never the cheaper default.
   const [runMode, setRunMode] = useState<"multi_agent" | "single_agent">("multi_agent");
   const fileInput = useRef<HTMLInputElement>(null);
+  // The files chosen in the drop zone, by click or by drop, shown before upload so the lecturer can
+  // check what will be sent.
+  const [chosen, setChosen] = useState<File[]>([]);
+  const [dragging, setDragging] = useState(false);
   const drivingRun = useRef<string | null>(null);
   const resumedRun = useRef<string | null>(null);
   // False once the page is left: the server keeps grading, this page just stops asking about it.
@@ -206,7 +210,7 @@ export default function TugasPage() {
 
   async function onUpload(event: React.FormEvent) {
     event.preventDefault();
-    const selected = Array.from(fileInput.current?.files ?? []);
+    const selected = chosen;
     if (selected.length === 0) {
       setError("Pilih berkas terlebih dahulu.");
       return;
@@ -218,6 +222,7 @@ export default function TugasPage() {
       const result = await api.uploadSubmissions(id, selected);
       setImported(result.files);
       if (fileInput.current) fileInput.current.value = "";
+      setChosen([]);
       await load();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Gagal mengunggah berkas.");
@@ -466,11 +471,66 @@ export default function TugasPage() {
             </CardHeader>
             <CardContent>
               <form onSubmit={onUpload} className="flex flex-col gap-4">
-                <div className="flex flex-col gap-2">
-                  <Label htmlFor="files">Berkas kiriman</Label>
-                  <Input id="files" ref={fileInput} type="file" multiple accept={ACCEPTED_FILES} />
+                <div>
+                  {/* The native input stays in the tab order (visually hidden, not display:none), so the
+                      zone is reachable by keyboard and its focus ring shows on the label via `peer`. */}
+                  <input
+                    id="files"
+                    ref={fileInput}
+                    type="file"
+                    multiple
+                    accept={ACCEPTED_FILES}
+                    className="peer sr-only"
+                    onChange={(event) => setChosen(Array.from(event.target.files ?? []))}
+                  />
+                  <label
+                    htmlFor="files"
+                    onDragOver={(event) => {
+                      event.preventDefault();
+                      setDragging(true);
+                    }}
+                    onDragLeave={() => setDragging(false)}
+                    onDrop={(event) => {
+                      event.preventDefault();
+                      setDragging(false);
+                      setChosen(Array.from(event.dataTransfer.files));
+                    }}
+                    className={`flex cursor-pointer flex-col items-center gap-2 rounded-xl border-2 border-dashed px-6 py-8 text-center transition-colors duration-200 peer-focus-visible:ring-3 peer-focus-visible:ring-ring/50 hover:border-primary hover:bg-surface ${
+                      dragging ? "border-primary bg-surface" : "border-primary/60 bg-surface/40"
+                    }`}
+                  >
+                    <span className="flex size-12 items-center justify-center rounded-full bg-surface text-primary">
+                      <UploadCloud className="size-6" aria-hidden="true" />
+                    </span>
+                    <span className="font-bold text-foreground">
+                      Klik untuk memilih berkas kiriman, atau seret berkas ke sini
+                    </span>
+                    <span className="text-sm text-muted-foreground">
+                      PDF, DOCX, TXT, atau ZIP · boleh beberapa berkas sekaligus
+                    </span>
+                    <span className="mt-2 inline-flex h-9 items-center rounded-lg border border-border bg-card px-4 text-sm font-medium shadow-sm">
+                      Pilih berkas
+                    </span>
+                  </label>
                 </div>
-                <Button type="submit" variant="outline" disabled={uploading} className="self-start">
+                {chosen.length > 0 ? (
+                  <div className="flex flex-col gap-2">
+                    <p className="text-sm font-bold">{chosen.length} berkas dipilih</p>
+                    <ul className="flex flex-col gap-1">
+                      {chosen.map((file) => (
+                        <li key={`${file.name}-${file.size}`} className="flex items-center gap-2 text-sm">
+                          <FileText className="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
+                          <span className="truncate">{file.name}</span>
+                          <span className="text-muted-foreground tabular-nums">
+                            {Math.max(1, Math.round(file.size / 1024))} KB
+                          </span>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                ) : null}
+                <Button type="submit" disabled={uploading || chosen.length === 0} className="self-start">
+                  <Upload data-icon="inline-start" aria-hidden="true" />
                   {uploading ? "Mengunggah…" : "Unggah berkas"}
                 </Button>
               </form>
