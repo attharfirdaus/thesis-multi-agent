@@ -1,0 +1,10 @@
+{
+  "id": "rga-search",
+  "name": "RGA Search",
+  "version": "0.1.1",
+  "minAppVersion": "1.8.7",
+  "description": "Full-text search inside the PDFs, EPUBs and Office files in your vault, powered by ripgrep-all.",
+  "author": "Jesse Griffin",
+  "authorUrl": "https://ekfocus.com",
+  "isDesktopOnly": true
+}

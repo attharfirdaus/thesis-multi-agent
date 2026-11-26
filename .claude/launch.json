@@ -1,0 +1,32 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "api",
+      "runtimeExecutable": "bash",
+      "runtimeArgs": [
+        "-c",
+        "cd backend && export ALLOWED_ORIGINS='[\"http://localhost:3001\"]' COOKIE_SECURE=false COOKIE_SAMESITE=lax && uv run uvicorn app.main:app --port 8010"
+      ],
+      "port": 8010
+    },
+    {
+      "name": "api-local",
+      "runtimeExecutable": "bash",
+      "runtimeArgs": [
+        "-c",
+        "cd backend && export ALLOWED_ORIGINS='[\"http://localhost:3000\",\"http://localhost:3001\"]' && ENV=development DATABASE_URL=postgresql://thesis_app:app_local_pw@localhost:5432/thesis_test MIGRATION_DATABASE_URL=postgresql://thesis_migrator:migrator_local_pw@localhost:5432/thesis_test LLM_BASE_URL= LLM_API_KEY= LLM_MODEL= COOKIE_SECURE=false COOKIE_SAMESITE=lax IDENTITY_DB_PATH=/tmp/thesis_preview_ids.db IDENTITY_ENCRYPTION_KEY=AVmxjfIU9ch5We_LMpyjTKsxVx_kDaWkRpNQelo4SV0= uv run uvicorn app.main:app --port 8010"
+      ],
+      "port": 8010
+    },
+    {
+      "name": "web",
+      "runtimeExecutable": "bash",
+      "runtimeArgs": [
+        "-c",
+        "cd frontend && NEXT_PUBLIC_API_BASE=http://localhost:8010 npm run dev"
+      ],
+      "port": 3001
+    }
+  ]
+}

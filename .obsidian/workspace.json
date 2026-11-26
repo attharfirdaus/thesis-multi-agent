@@ -1,0 +1,240 @@
+{
+  "main": {
+    "id": "805ba76c43ccee1d",
+    "type": "split",
+    "children": [
+      {
+        "id": "594618ac3c84099f",
+        "type": "tabs",
+        "children": [
+          {
+            "id": "d8c523011e9f78c2",
+            "type": "leaf",
+            "pinned": true,
+            "state": {
+              "type": "graph",
+              "state": {},
+              "pinned": true,
+              "icon": "lucide-git-fork",
+              "title": "Graph view"
+            }
+          },
+          {
+            "id": "682235280642aae1",
+            "type": "leaf",
+            "state": {
+              "type": "pdf",
+              "state": {
+                "file": "TESIS 1.pdf"
+              },
+              "icon": "lucide-file-text",
+              "title": "TESIS 1"
+            }
+          }
+        ],
+        "currentTab": 1
+      }
+    ],
+    "direction": "vertical"
+  },
+  "left": {
+    "id": "00f57c6622662057",
+    "type": "split",
+    "children": [
+      {
+        "id": "b5c73b0347bae5c3",
+        "type": "tabs",
+        "children": [
+          {
+            "id": "1c40978e80dc8571",
+            "type": "leaf",
+            "state": {
+              "type": "file-explorer",
+              "state": {
+                "sortOrder": "alphabetical",
+                "autoReveal": false,
+                "showSearch": false,
+                "searchQuery": ""
+              },
+              "icon": "lucide-folder-closed",
+              "title": "Files"
+            }
+          },
+          {
+            "id": "387f6f8eeadb794c",
+            "type": "leaf",
+            "state": {
+              "type": "search",
+              "state": {
+                "query": "",
+                "matchingCase": false,
+                "explainSearch": false,
+                "collapseAll": false,
+                "extraContext": false,
+                "sortOrder": "alphabetical"
+              },
+              "icon": "lucide-search",
+              "title": "Search"
+            }
+          },
+          {
+            "id": "fe8e441c5005fa6c",
+            "type": "leaf",
+            "state": {
+              "type": "bookmarks",
+              "state": {
+                "showSearch": false,
+                "searchQuery": ""
+              },
+              "icon": "lucide-bookmark",
+              "title": "Bookmarks"
+            }
+          }
+        ]
+      }
+    ],
+    "direction": "horizontal",
+    "width": 300,
+    "collapsed": true
+  },
+  "right": {
+    "id": "f6f5e9cf7364b807",
+    "type": "split",
+    "children": [
+      {
+        "id": "f94020eb336a975b",
+        "type": "tabs",
+        "children": [
+          {
+            "id": "e49873eecddd6d25",
+            "type": "leaf",
+            "state": {
+              "type": "backlink",
+              "state": {
+                "file": "TESIS 1.pdf",
+                "collapseAll": false,
+                "extraContext": false,
+                "sortOrder": "alphabetical",
+                "showSearch": false,
+                "searchQuery": "",
+                "backlinkCollapsed": false,
+                "unlinkedCollapsed": true
+              },
+              "icon": "links-coming-in",
+              "title": "Backlinks"
+            }
+          },
+          {
+            "id": "6495673dbbba3010",
+            "type": "leaf",
+            "state": {
+              "type": "outgoing-link",
+              "state": {
+                "linksCollapsed": false,
+                "unlinkedCollapsed": true
+              },
+              "icon": "links-going-out",
+              "title": "Outgoing links"
+            }
+          },
+          {
+            "id": "58b669b036bc1b7d",
+            "type": "leaf",
+            "state": {
+              "type": "tag",
+              "state": {
+                "sortOrder": "frequency",
+                "useHierarchy": true,
+                "showSearch": false,
+                "searchQuery": ""
+              },
+              "icon": "lucide-tags",
+              "title": "Tags"
+            }
+          },
+          {
+            "id": "7a3efe052489eea3",
+            "type": "leaf",
+            "state": {
+              "type": "all-properties",
+              "state": {
+                "sortOrder": "frequency",
+                "showSearch": false,
+                "searchQuery": ""
+              },
+              "icon": "lucide-archive",
+              "title": "All properties"
+            }
+          },
+          {
+            "id": "23a3ef52344d8bc6",
+            "type": "leaf",
+            "state": {
+              "type": "outline",
+              "state": {
+                "followCursor": false,
+                "showSearch": false,
+                "searchQuery": ""
+              },
+              "icon": "lucide-list",
+              "title": "Outline"
+            }
+          },
+          {
+            "id": "b980b01e2be27750",
+            "type": "leaf",
+            "state": {
+              "type": "claudian-view",
+              "state": {
+                "tabWorkspace": {
+                  "version": 1,
+                  "openTabs": [
+                    {
+                      "tabId": "tab-1795101125866-vq5gu9i",
+                      "conversationId": "conv-1795057135671-595nwx2na"
+                    }
+                  ],
+                  "activeTabId": "tab-1795101125866-vq5gu9i",
+                  "expandedTitleTabIds": [
+                    "tab-1795101125866-vq5gu9i"
+                  ]
+                }
+              },
+              "icon": "bot",
+              "title": "Claudian"
+            }
+          }
+        ],
+        "currentTab": 5
+      }
+    ],
+    "direction": "horizontal",
+    "width": 605.6
+  },
+  "left-ribbon": {
+    "hiddenItems": {
+      "realclaudian:Open Claudian": false,
+      "rga-search:Search inside documents": false,
+      "switcher:Open quick switcher": false,
+      "graph:Open graph view": false,
+      "canvas:Create new canvas": false,
+      "daily-notes:Open today's daily note": false,
+      "templates:Insert template": false,
+      "command-palette:Open command palette": false,
+      "bases:Create new base": false
+    }
+  },
+  "active": "682235280642aae1",
+  "lastOpenFiles": [
+    "TESIS 1.pdf",
+    "frontend/components/auth-layout.tsx",
+    "frontend/node_modules/next/dist/docs/01-app/04-glossary.md",
+    "frontend/node_modules/next/dist/docs/01-app/02-guides/building.md",
+    "~$Seminar Tesis 1.pptx",
+    "Seminar Tesis 1.pptx",
+    "BAB 4.pdf",
+    "BAB 4.pdf",
+    "frontend/node_modules/eslint-plugin-react/README.md",
+    "Untitled"
+  ]
+}
