@@ -4,7 +4,9 @@ import { Fragment, useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 
-import { AdminOnly } from "@/components/app-shell";
+import { ArrowDown, ArrowUp, ArrowUpDown, Check, ChevronLeft } from "lucide-react";
+
+import { AdminOnly, PageHeader } from "@/components/app-shell";
 import { StatusBadge, runStatus } from "@/components/status-badge";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
@@ -209,16 +211,24 @@ export default function HasilPage() {
     key === sortKey ? (ascending ? "ascending" : "descending") : ("none" as const);
 
   const sortableHeader = (key: SortKey, label: string) => (
-    <th scope="col" aria-sort={sortState(key)} className="py-2 pr-4 font-medium">
+    <th scope="col" aria-sort={sortState(key)} className="py-2 pr-4 font-medium whitespace-nowrap">
       <button
         type="button"
         onClick={() => toggleSort(key)}
-        className="inline-flex items-center gap-1 rounded underline-offset-4 hover:underline focus-visible:ring-3 focus-visible:ring-ring/50"
+        className={`inline-flex items-center gap-1 rounded tracking-wide uppercase transition-colors hover:text-foreground focus-visible:ring-3 focus-visible:ring-ring/50 ${
+          key === sortKey ? "text-foreground" : ""
+        }`}
       >
         {label}
-        <span aria-hidden className="text-muted-foreground">
-          {key === sortKey ? (ascending ? "▲" : "▼") : "↕"}
-        </span>
+        {key === sortKey ? (
+          ascending ? (
+            <ArrowUp className="size-3.5" aria-hidden="true" />
+          ) : (
+            <ArrowDown className="size-3.5" aria-hidden="true" />
+          )
+        ) : (
+          <ArrowUpDown className="size-3.5 opacity-60" aria-hidden="true" />
+        )}
       </button>
     </th>
   );
@@ -229,17 +239,16 @@ export default function HasilPage() {
         <p className="text-muted-foreground">Memuat…</p>
       ) : (
         <>
-          <header className="flex flex-wrap items-start justify-between gap-4">
-            <div>
-              <h1 className="text-2xl font-semibold">Hasil penilaian</h1>
-              <p className="text-muted-foreground">
-                {detail.title} · {detail.course}
-              </p>
-            </div>
-            <Link href={`/tugas/${id}`} className="underline underline-offset-4 hover:text-foreground">
-              Kembali ke tugas
-            </Link>
-          </header>
+          <PageHeader
+            eyebrow={
+              <Link href={`/tugas/${id}`} className="inline-flex items-center gap-1 normal-case tracking-normal hover:underline underline-offset-4">
+                <ChevronLeft className="size-4" aria-hidden="true" />
+                {detail.title}
+              </Link>
+            }
+            title="Hasil penilaian"
+            description={`${detail.course} · Klik satu baris untuk membaca kutipan bukti dan meninjau nilainya.`}
+          />
 
           {error ? (
             <Alert variant="destructive">
@@ -351,7 +360,7 @@ export default function HasilPage() {
                       id="level_filter"
                       value={levelFilter}
                       onChange={(event) => setLevelFilter(event.target.value)}
-                      className="h-8 w-full rounded-lg border border-input bg-transparent px-2 text-base outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
+                      className="h-10 w-full rounded-lg border border-input bg-card px-3 text-base outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
                     >
                       <option value="">Semua tingkat</option>
                       {levels.map((level) => (
@@ -370,8 +379,8 @@ export default function HasilPage() {
                     </p>
                   ) : (
                     <div className="overflow-x-auto">
-                      <table className="w-full min-w-[720px] border-collapse text-left">
-                        <thead>
+                      <table className="w-full [&_td:first-child]:pl-3 [&_th]:py-3 [&_th:first-child]:pl-3 [&_tbody_tr]:transition-colors [&_tbody_tr:hover]:bg-surface/60 min-w-[720px] border-collapse text-left">
+                        <thead className="bg-muted/70 text-xs tracking-wide text-muted-foreground uppercase">
                           <tr className="border-b">
                             {sortableHeader("pseudonym", "Pseudonim")}
                             {sortableHeader("level", "Tingkat Kognitif")}
@@ -394,25 +403,40 @@ export default function HasilPage() {
                             <Fragment key={row.id}>
                               <tr
                                 onClick={() => router.push(`/kiriman/${row.id}?run=${run.id}`)}
-                                className="cursor-pointer border-b hover:bg-muted/60"
+                                className="cursor-pointer border-b"
                               >
-                                <td className="py-2 pr-4">
+                                <td className="py-3 pr-4 whitespace-nowrap">
                                   <Link
                                     href={`/kiriman/${row.id}?run=${run.id}`}
-                                    className="underline underline-offset-4 hover:text-foreground"
+                                    className="font-bold text-primary underline-offset-4 hover:underline"
                                   >
                                     {submissionLabel(row.pseudonym, row.real_name)}
                                   </Link>
                                 </td>
-                              <td className="py-2 pr-4">
-                                {row.level === null ? "—" : levelLabel(scoreLevel(row.level), levelNames)}
+                              <td className="py-3 pr-4 whitespace-nowrap">
+                                {row.level === null ? (
+                                  "—"
+                                ) : (
+                                  <span className="inline-flex rounded-md bg-surface px-2 py-0.5 font-bold text-surface-foreground">
+                                    {levelLabel(scoreLevel(row.level), levelNames)}
+                                  </span>
+                                )}
                               </td>
                               <td className="py-2 pr-4 whitespace-nowrap">{row.spread}</td>
                               {indicatorColumns.map((indicator) => (
-                                <td key={indicator} className="py-2 pr-4">
-                                  {row.indicators[indicator] === undefined
-                                    ? "—"
-                                    : scoreLevel(row.indicators[indicator])}
+                                <td key={indicator} className="py-3 pr-4 whitespace-nowrap">
+                                  {row.indicators[indicator] === undefined ? (
+                                    "—"
+                                  ) : scoreLevel(row.indicators[indicator]) === "Ada" ? (
+                                    <span className="inline-flex items-center gap-1 font-bold text-primary">
+                                      <Check className="size-4" aria-hidden="true" />
+                                      Ada
+                                    </span>
+                                  ) : (
+                                    <span className="text-muted-foreground">
+                                      {scoreLevel(row.indicators[indicator])}
+                                    </span>
+                                  )}
                                 </td>
                               ))}
                                 <td className="py-2 pr-4">

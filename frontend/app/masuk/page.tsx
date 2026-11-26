@@ -4,6 +4,7 @@ import { useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 
+import { AuthLayout } from "@/components/auth-layout";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -33,10 +34,10 @@ export default function MasukPage() {
   }
 
   return (
-    <main className="flex min-h-screen items-center justify-center p-6">
-      <Card className="w-full max-w-md">
+    <AuthLayout>
+      <Card className="w-full">
         <CardHeader>
-          <CardTitle className="text-2xl">Masuk</CardTitle>
+          <CardTitle className="text-3xl">Masuk</CardTitle>
           <CardDescription>Gunakan email dan kata sandi akun dosen Anda.</CardDescription>
         </CardHeader>
         <CardContent>
@@ -70,19 +71,19 @@ export default function MasukPage() {
               </Alert>
             ) : null}
 
-            <Button type="submit" disabled={busy} className="w-full">
+            <Button type="submit" size="lg" disabled={busy} className="w-full">
               {busy ? "Memproses…" : "Masuk"}
             </Button>
           </form>
 
           <p className="mt-6 text-sm text-muted-foreground">
             Belum punya akun?{" "}
-            <Link href="/daftar" className="underline underline-offset-4 hover:text-foreground">
+            <Link href="/daftar" className="font-bold text-primary underline underline-offset-4 hover:text-primary/80">
               Daftar sebagai dosen
             </Link>
           </p>
         </CardContent>
       </Card>
-    </main>
+    </AuthLayout>
   );
 }

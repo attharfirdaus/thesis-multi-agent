@@ -4,7 +4,9 @@ import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
 
-import { AdminOnly } from "@/components/app-shell";
+import { BarChart3, ChevronLeft } from "lucide-react";
+
+import { AdminOnly, PageHeader } from "@/components/app-shell";
 import { StatusBadge, runStatus, segmentationStatus } from "@/components/status-badge";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
@@ -39,7 +41,7 @@ const OPEN_SEGMENT = "__segment";
 const unwrap = (piece: string): string => piece.replace(/(?<!\n)\n(?!\n|\s*(?:\d{1,2}[.)]|[-•–*])\s)/g, " ");
 
 const TEXTAREA_CLASS =
-  "w-full rounded-lg border border-input bg-transparent px-2.5 py-1.5 text-base leading-7 outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50";
+  "w-full rounded-lg border border-input bg-card px-3 py-2 text-base leading-7 outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50";
 
 export default function KirimanPage() {
   const { id } = useParams<{ id: string }>();
@@ -264,8 +266,8 @@ export default function KirimanPage() {
             onClick={() => focusEvidence(score.id)}
             className="flex flex-wrap items-baseline gap-2 rounded text-left focus-visible:ring-3 focus-visible:ring-ring/50"
           >
-            <span className="font-medium">{DIMENSION_LABEL[score.dimension]}</span>
-            <span className="text-muted-foreground">
+            <span className="font-heading text-lg font-semibold">{DIMENSION_LABEL[score.dimension]}</span>
+            <span className="inline-flex rounded-md bg-surface px-2 py-0.5 text-sm font-bold text-surface-foreground">
               {score.indicator ? `${score.indicator} · ` : ""}
               {levelLabel(scoreLevel(score.level, levels), levelNames)}
             </span>
@@ -327,7 +329,7 @@ export default function KirimanPage() {
                   id={`level-${score.id}`}
                   value={draft.level}
                   onChange={(event) => setDraft({ ...draft, level: event.target.value })}
-                  className="h-8 w-full rounded-lg border border-input bg-background px-2 text-base outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
+                  className="h-10 w-full rounded-lg border border-input bg-card px-3 text-base outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
                 >
                   {options.map((level) => (
                     <option key={level} value={level}>
@@ -413,30 +415,30 @@ export default function KirimanPage() {
         <p className="text-muted-foreground">Memuat…</p>
       ) : (
         <>
-          <header className="flex flex-wrap items-start justify-between gap-4">
-            <div className="flex flex-col gap-2">
-              <h1 className="text-2xl font-semibold">{submissionLabel(detail.pseudonym, detail.real_name)}</h1>
-              <div className="flex flex-wrap items-center gap-2">
+          <PageHeader
+            eyebrow={
+              <Link href={`/tugas/${detail.assignment_id}`} className="inline-flex items-center gap-1 normal-case tracking-normal hover:underline underline-offset-4">
+                <ChevronLeft className="size-4" aria-hidden="true" />
+                Kembali ke tugas
+              </Link>
+            }
+            title={submissionLabel(detail.pseudonym, detail.real_name)}
+            description={
+              <span className="mt-1 flex flex-wrap items-center gap-2">
                 <StatusBadge {...segmentationStatus(detail.segmentation_status)} />
                 {detail.run ? <StatusBadge {...runStatus(detail.run.status)} /> : null}
                 {detail.review_flags?.length ? <StatusBadge tone="amber" label="Perlu Ditinjau" /> : null}
-              </div>
-            </div>
-            <div className="flex flex-wrap items-center gap-4">
-              <Link
-                href={`/tugas/${detail.assignment_id}`}
-                className="underline underline-offset-4 hover:text-foreground"
-              >
-                Kembali ke tugas
-              </Link>
-              <Link
-                href={`/tugas/${detail.assignment_id}/hasil`}
-                className="underline underline-offset-4 hover:text-foreground"
-              >
-                Lihat hasil penilaian
-              </Link>
-            </div>
-          </header>
+              </span>
+            }
+            actions={
+              <Button asChild variant="outline">
+                <Link href={`/tugas/${detail.assignment_id}/hasil`}>
+                  <BarChart3 data-icon="inline-start" aria-hidden="true" />
+                  Lihat hasil penilaian
+                </Link>
+              </Button>
+            }
+          />
 
           {error ? (
             <Alert variant="destructive">
@@ -617,7 +619,7 @@ export default function KirimanPage() {
                       id="exclusion"
                       value={detail.exclusion_reason ?? ""}
                       onChange={(event) => void onExclusion((event.target.value || null) as ExclusionReason | null)}
-                      className="h-8 w-full rounded-lg border border-input bg-background px-2 text-base outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
+                      className="h-10 w-full rounded-lg border border-input bg-card px-3 text-base outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
                     >
                       <option value="">Termasuk data evaluasi</option>
                       {Object.entries(EXCLUSION_LABELS).map(([value, label]) => (

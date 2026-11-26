@@ -126,6 +126,15 @@ def test_synthesis_carries_the_analysis_and_the_ai_output_but_no_rubric():
     assert "Rubrik versi" not in user and "orientasi" not in user
 
 
+def test_synthesis_drafts_a_neutral_report_not_praise():
+    """The draft feedback is AI output the lecturer has not reviewed yet, so the synthesis agent is told
+    to report the evidence by segment and to give no compliment or overall verdict."""
+    system, _ = synthesis_prompt({}, {}, AI_OUTPUT, SEGMENTS)
+    assert "neutral evaluation report, not praise" in system
+    assert "concluding verdict on the student" in system
+    assert "the lecturer will review" in system
+
+
 def test_synthesis_retry_carries_the_evidence_failure_reason():
     reason = "kutipan tidak ditemukan di teks"
     _, first = synthesis_prompt({}, {}, AI_OUTPUT, SEGMENTS)

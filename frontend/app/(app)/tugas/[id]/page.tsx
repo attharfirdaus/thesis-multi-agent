@@ -4,7 +4,9 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 
-import { AdminOnly } from "@/components/app-shell";
+import { BarChart3, ChevronLeft, ChevronRight, FileText, Upload, UploadCloud } from "lucide-react";
+
+import { AdminOnly, PageHeader } from "@/components/app-shell";
 import { StatusBadge, runStatus, segmentationStatus } from "@/components/status-badge";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
@@ -100,6 +102,10 @@ export default function TugasPage() {
   // The thesis compares both modes, so the baseline is a choice beside the scope, never the cheaper default.
   const [runMode, setRunMode] = useState<"multi_agent" | "single_agent">("multi_agent");
   const fileInput = useRef<HTMLInputElement>(null);
+  // The files chosen in the drop zone, by click or by drop, shown before upload so the lecturer can
+  // check what will be sent.
+  const [chosen, setChosen] = useState<File[]>([]);
+  const [dragging, setDragging] = useState(false);
   const drivingRun = useRef<string | null>(null);
   const resumedRun = useRef<string | null>(null);
   // False once the page is left: the server keeps grading, this page just stops asking about it.
@@ -204,7 +210,7 @@ export default function TugasPage() {
 
   async function onUpload(event: React.FormEvent) {
     event.preventDefault();
-    const selected = Array.from(fileInput.current?.files ?? []);
+    const selected = chosen;
     if (selected.length === 0) {
       setError("Pilih berkas terlebih dahulu.");
       return;
@@ -216,6 +222,7 @@ export default function TugasPage() {
       const result = await api.uploadSubmissions(id, selected);
       setImported(result.files);
       if (fileInput.current) fileInput.current.value = "";
+      setChosen([]);
       await load();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Gagal mengunggah berkas.");
@@ -344,21 +351,31 @@ export default function TugasPage() {
         <p className="text-muted-foreground">Memuat…</p>
       ) : (
         <>
-          <header className="flex flex-wrap items-start justify-between gap-4">
-            <div>
-              <h1 className="text-2xl font-semibold">{detail.title}</h1>
-              <p className="text-muted-foreground">
-                {detail.course} · {detail.submission_count} kiriman
-              </p>
-              {/* KF-02: read-only — a new assignment takes the newest rubric version automatically. */}
-              <p className="text-sm text-muted-foreground">
-                Versi rubrik: {detail.rubric_version ?? "belum ada"}
-              </p>
-            </div>
-            <div className="flex flex-wrap items-center gap-3">
-              <Link href={`/tugas/${id}/hasil`} className="underline underline-offset-4 hover:text-foreground">
-                Lihat hasil penilaian
+          <PageHeader
+            eyebrow={
+              <Link href="/dasbor" className="inline-flex items-center gap-1 normal-case tracking-normal hover:underline underline-offset-4">
+                <ChevronLeft className="size-4" aria-hidden="true" />
+                Dasbor
               </Link>
+            }
+            title={detail.title}
+            description={
+              <>
+                {detail.course} · {detail.submission_count} kiriman
+                {/* KF-02: read-only — a new assignment takes the newest rubric version automatically. */}
+                <span className="ml-2 inline-flex items-center rounded-md bg-surface px-2 py-0.5 text-sm text-surface-foreground">
+                  Rubrik versi {detail.rubric_version ?? "belum ada"}
+                </span>
+              </>
+            }
+            actions={
+            <>
+              <Button asChild variant="outline">
+                <Link href={`/tugas/${id}/hasil`}>
+                  <BarChart3 data-icon="inline-start" aria-hidden="true" />
+                  Lihat hasil penilaian
+                </Link>
+              </Button>
               <Button
                 variant="outline"
                 size="sm"
@@ -371,8 +388,9 @@ export default function TugasPage() {
               <Button variant="destructive" size="sm" disabled={driving} onClick={() => void onDeleteAssignment()}>
                 Hapus tugas
               </Button>
-            </div>
-          </header>
+            </>
+            }
+          />
 
           {editing ? (
             <Card>
@@ -406,7 +424,7 @@ export default function TugasPage() {
                       rows={4}
                       value={editing.prompt_text}
                       onChange={(e) => setEditing({ ...editing, prompt_text: e.target.value })}
-                      className="w-full rounded-lg border border-input bg-transparent px-2.5 py-1.5 text-base outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
+                      className="w-full rounded-lg border border-input bg-card px-3 py-2 text-base outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
                     />
                   </div>
                   <div className="flex gap-3">
@@ -453,11 +471,66 @@ export default function TugasPage() {
             </CardHeader>
             <CardContent>
               <form onSubmit={onUpload} className="flex flex-col gap-4">
-                <div className="flex flex-col gap-2">
-                  <Label htmlFor="files">Berkas kiriman</Label>
-                  <Input id="files" ref={fileInput} type="file" multiple accept={ACCEPTED_FILES} />
+                <div>
+                  {/* The native input stays in the tab order (visually hidden, not display:none), so the
+                      zone is reachable by keyboard and its focus ring shows on the label via `peer`. */}
+                  <input
+                    id="files"
+                    ref={fileInput}
+                    type="file"
+                    multiple
+                    accept={ACCEPTED_FILES}
+                    className="peer sr-only"
+                    onChange={(event) => setChosen(Array.from(event.target.files ?? []))}
+                  />
+                  <label
+                    htmlFor="files"
+                    onDragOver={(event) => {
+                      event.preventDefault();
+                      setDragging(true);
+                    }}
+                    onDragLeave={() => setDragging(false)}
+                    onDrop={(event) => {
+                      event.preventDefault();
+                      setDragging(false);
+                      setChosen(Array.from(event.dataTransfer.files));
+                    }}
+                    className={`flex cursor-pointer flex-col items-center gap-2 rounded-xl border-2 border-dashed px-6 py-8 text-center transition-colors duration-200 peer-focus-visible:ring-3 peer-focus-visible:ring-ring/50 hover:border-primary hover:bg-surface ${
+                      dragging ? "border-primary bg-surface" : "border-primary/60 bg-surface/40"
+                    }`}
+                  >
+                    <span className="flex size-12 items-center justify-center rounded-full bg-surface text-primary">
+                      <UploadCloud className="size-6" aria-hidden="true" />
+                    </span>
+                    <span className="font-bold text-foreground">
+                      Klik untuk memilih berkas kiriman, atau seret berkas ke sini
+                    </span>
+                    <span className="text-sm text-muted-foreground">
+                      PDF, DOCX, TXT, atau ZIP · boleh beberapa berkas sekaligus
+                    </span>
+                    <span className="mt-2 inline-flex h-9 items-center rounded-lg border border-border bg-card px-4 text-sm font-medium shadow-sm">
+                      Pilih berkas
+                    </span>
+                  </label>
                 </div>
-                <Button type="submit" variant="outline" disabled={uploading} className="self-start">
+                {chosen.length > 0 ? (
+                  <div className="flex flex-col gap-2">
+                    <p className="text-sm font-bold">{chosen.length} berkas dipilih</p>
+                    <ul className="flex flex-col gap-1">
+                      {chosen.map((file) => (
+                        <li key={`${file.name}-${file.size}`} className="flex items-center gap-2 text-sm">
+                          <FileText className="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
+                          <span className="truncate">{file.name}</span>
+                          <span className="text-muted-foreground tabular-nums">
+                            {Math.max(1, Math.round(file.size / 1024))} KB
+                          </span>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                ) : null}
+                <Button type="submit" disabled={uploading || chosen.length === 0} className="self-start">
+                  <Upload data-icon="inline-start" aria-hidden="true" />
                   {uploading ? "Mengunggah…" : "Unggah berkas"}
                 </Button>
               </form>
@@ -690,8 +763,17 @@ export default function TugasPage() {
                 </p>
               ) : (
                 <div className="overflow-x-auto">
-                  <table className="w-full min-w-[640px] border-collapse text-left">
-                    <thead>
+                  {/* Fixed layout with set widths: opening a review's reasons wraps inside its own column
+                      instead of re-flowing every other column. */}
+                  <table className="w-full table-fixed [&_td:first-child]:pl-3 [&_th]:py-3 [&_th:first-child]:pl-3 [&_tbody_tr]:transition-colors [&_tbody_tr:hover]:bg-surface/60 min-w-[880px] border-collapse text-left">
+                    <colgroup>
+                      <col className="w-[26%]" />
+                      <col className="w-[17%]" />
+                      <col className="w-[33%]" />
+                      <col className="w-[14%]" />
+                      <col className="w-[10%]" />
+                    </colgroup>
+                    <thead className="bg-muted/70 text-xs tracking-wide text-muted-foreground uppercase">
                       <tr className="border-b">
                         <th scope="col" className="py-2 pr-4 font-medium">
                           Pseudonim
@@ -712,8 +794,8 @@ export default function TugasPage() {
                     </thead>
                     <tbody>
                       {submissions.map((submission) => (
-                        <tr key={submission.id} className="border-b last:border-0">
-                          <td className="py-2 pr-4">
+                        <tr key={submission.id} className="border-b align-top last:border-0">
+                          <td className="py-3 pr-4 break-words">
                             <Link
                               href={`/kiriman/${submission.id}`}
                               className="underline underline-offset-4 hover:text-foreground"
@@ -728,9 +810,15 @@ export default function TugasPage() {
                             {submission.review_flags?.length ? (
                               <div className="flex flex-col gap-1">
                                 <StatusBadge tone="amber" label="Perlu Ditinjau" className="self-start" />
-                                <details className="text-sm text-muted-foreground">
-                                  <summary className="cursor-pointer">Alasan</summary>
-                                  {flagSentences(submission.review_flags).join(" ")}
+                                <details className="group text-sm text-muted-foreground">
+                                  <summary className="inline-flex cursor-pointer list-none items-center gap-1 rounded font-medium text-primary outline-none hover:underline focus-visible:ring-3 focus-visible:ring-ring/50 [&::-webkit-details-marker]:hidden">
+                                    <ChevronRight
+                                      className="size-4 transition-transform duration-200 group-open:rotate-90"
+                                      aria-hidden="true"
+                                    />
+                                    Alasan
+                                  </summary>
+                                  <p className="mt-1 break-words">{flagSentences(submission.review_flags).join(" ")}</p>
                                 </details>
                               </div>
                             ) : (

@@ -1,0 +1,50 @@
+.rga-search-result {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.rga-search-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 1em;
+}
+
+.rga-search-title {
+  font-weight: var(--font-semibold);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rga-search-page {
+  flex-shrink: 0;
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+}
+
+.rga-search-snippet {
+  color: var(--text-normal);
+  font-size: var(--font-ui-small);
+  overflow-wrap: anywhere;
+}
+
+.rga-search-match {
+  background-color: var(--text-highlight-bg);
+  border-radius: 2px;
+}
+
+.rga-search-meta {
+  display: flex;
+  gap: 0.75em;
+  color: var(--text-faint);
+  font-size: var(--font-ui-smaller);
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.rga-search-citekey {
+  color: var(--text-muted);
+}
